@@ -19,6 +19,7 @@ local function get_state(bufnr)
     if not buffer_states[bufnr] then
         buffer_states[bufnr] = {
             session_id = nil,
+            cell_data = {},
         }
     end
     return buffer_states[bufnr]
@@ -39,8 +40,8 @@ local function check_session_exists(sid, file_path)
     return ok and sessions and sessions[sid] and sessions[sid].path == file_path
 end
 
-local function get_session_id()
-    local state = get_state()
+local function get_session_id(bufnr)
+    local state = get_state(bufnr)
     if state.session_id then
         return state.session_id
     end
@@ -80,8 +81,8 @@ local function get_session_id()
     return state.session_id
 end
 
-local function get_cells_ts()
-    local parser = vim.treesitter.get_parser(0, "python")
+local function get_cells_ts(bufnr)
+    local parser = vim.treesitter.get_parser(bufnr, "python")
     local tree = parser:parse()[1]
     local root = tree:root()
 
@@ -123,9 +124,10 @@ local function get_cells_ts()
     return cells
 end
 
-local function get_current_cell_index()
-    local cursor_line = vim.api.nvim_win_get_cursor(0)[1]
-    local cells = get_cells_ts()
+local function get_current_cell_index(bufnr)
+    local winid = vim.fn.bufwinid(bufnr)
+    local cursor_line = vim.api.nvim_win_get_cursor(winid)[1]
+    local cells = get_cells_ts(bufnr)
     for i = #cells, 1, -1 do
         if cursor_line >= cells[i].start_line then
             return i - 1
@@ -134,8 +136,8 @@ local function get_current_cell_index()
     return nil
 end
 
-local function kernel_execute(code, callback)
-    local sid = get_session_id()
+local function kernel_execute(bufnr, code, callback)
+    local sid = get_session_id(bufnr)
     if not sid then
         return
     end
@@ -187,7 +189,54 @@ local function kernel_execute(code, callback)
     })
 end
 
-M.refresh = ASYNC.wrap(function()
+local function render_cell_output(bufnr)
+    local state = get_state(bufnr)
+    local cells = get_cells_ts(bufnr)
+    vim.api.nvim_buf_clear_namespace(bufnr, NAMESPACE, 0, -1)
+
+    for i, data in ipairs(state.cell_data) do
+        local cell_info = cells[i]
+        if cell_info and cell_info.end_line then
+            local virt_lines = {}
+            if data.status == 'stale' then
+                table.insert(virt_lines, {{"Stale", "WarningMsg"}})
+            elseif data.status == 'idle' then
+                table.insert(virt_lines, {{"Success", "WarningMsg"}})
+            elseif data.status == 'exception' then
+                table.insert(virt_lines, {{"Failed", "WarningMsg"}})
+            elseif data.status == 'cancelled' or data.status == 'interrupted' then
+                table.insert(virt_lines, {{"Cancelled", "WarningMsg"}})
+            elseif data.status == 'queued' then
+                table.insert(virt_lines, {{"Queued", "WarningMsg"}})
+            elseif data.status == 'running' then
+                table.insert(virt_lines, {{"Running", "WarningMsg"}})
+            elseif data.status == 'marimo-error' then
+                table.insert(virt_lines, {{"Error", "WarningMsg"}})
+            else
+                table.insert(virt_lines, {{data.status, "WarningMsg"}})
+            end
+
+            if data.console_outputs then
+                for _, out in ipairs(data.console_outputs) do
+                    local out_lines = vim.split(out.data, "\n")
+                    local hl = (out.channel == "stderr") and "ErrorMsg" or "Comment"
+                    for _, l in ipairs(out_lines) do
+                        if l ~= "" then
+                            table.insert(virt_lines, {{l, hl}})
+                        end
+                    end
+                end
+            end
+
+            vim.api.nvim_buf_set_extmark(bufnr, NAMESPACE, cell_info.end_line - 1, 0, {
+                virt_lines = virt_lines,
+                virt_lines_above = false
+            })
+        end
+    end
+end
+
+M.refresh = function(bufnr)
     ASYNC.promisify(vim.schedule)
 
     local code = --[[python--]] [[
@@ -199,55 +248,29 @@ async with cm.get_context() as ctx:
     for c in ctx.cells:
         res.append({
             "status": c.status,
-            "stale": c.status == "stale",
             "console_outputs": [o.asdict() for o in c.console_outputs]
         })
     print(json.dumps(res))
 ]]
-    kernel_execute(code, function(data, is_stdout)
+    kernel_execute(bufnr, code, function(data, is_stdout)
         if not is_stdout then
             print_error(vim.trim(data))
             return
         end
 
         local ok, cell_data = pcall(vim.fn.json_decode, data)
-        if not ok then
-            return
+        if ok then
+            get_state(bufnr).cell_data = cell_data
+            render_cell_output(bufnr)
         end
 
-        local cells = get_cells_ts()
-        vim.api.nvim_buf_clear_namespace(0, NAMESPACE, 0, -1)
-        for i, d in ipairs(cell_data) do
-            local cell_info = cells[i]
-            if cell_info and cell_info.end_line then
-                local virt_lines = {}
-                if d.stale then
-                    table.insert(virt_lines, {{"[STALE]", "WarningMsg"}})
-                end
-                for _, out in ipairs(d.console_outputs) do
-                    local out_lines = vim.split(out.data, "\n")
-                    local hl = (out.channel == "stderr") and "ErrorMsg" or "Comment"
-                    for _, l in ipairs(out_lines) do
-                        if l ~= "" then
-                            table.insert(virt_lines, {{l, hl}})
-                        end
-                    end
-                end
-                if #virt_lines > 0 then
-                    vim.api.nvim_buf_set_extmark(0, NAMESPACE, cell_info.end_line - 1, 0, {
-                        virt_lines = virt_lines,
-                        virt_lines_above = false
-                    })
-                end
-            end
-        end
     end)
-end)
+end
 
-M.run = ASYNC.wrap(function()
+M.run = function(bufnr)
     ASYNC.promisify(vim.schedule)
 
-    local idx = get_current_cell_index()
+    local idx = get_current_cell_index(bufnr)
     if not idx then
         return
     end
@@ -281,7 +304,7 @@ async with cm.get_context() as ctx:
 ]], idx)
 
     local to_run = {}
-    kernel_execute(code, function(data, is_stdout)
+    kernel_execute(bufnr, code, function(data, is_stdout)
         if is_stdout then
             local ok, jsondata = pcall(vim.fn.json_decode, data)
             if ok then
@@ -305,10 +328,10 @@ async with cm.get_context() as ctx:
     # Verify if cell still exists and has errors after run
     if cell and any(o.channel == "stderr" for o in cell.console_outputs):
         print(f"ERROR:{name}")
-        ]], id)
+]], id)
 
         local failed = false
-        kernel_execute(code, function(data, is_stdout)
+        kernel_execute(bufnr, code, function(data, is_stdout)
             if data == '' then
                 return
             end
@@ -323,8 +346,6 @@ async with cm.get_context() as ctx:
                 print_error("Error in cell: " .. vim.trim(error))
                 return
             end
-            -- Any other output is likely an error or unexpected diagnostic
-            -- print_error(vim.trim(data))
         end)
 
         if failed then
@@ -332,18 +353,18 @@ async with cm.get_context() as ctx:
         end
     end
 
-    M.refresh()
-end)
+    M.refresh(bufnr)
+end
 
-M.reformat = ASYNC.wrap(function()
+M.reformat = function(bufnr)
     ASYNC.promisify(vim.schedule)
 
-    local idx = get_current_cell_index()
+    local idx = get_current_cell_index(bufnr)
     if not idx then
         return
     end
 
-    local sid = get_session_id()
+    local sid = get_session_id(bufnr)
     if not sid then
         return
     end
@@ -353,28 +374,22 @@ import marimo._code_mode as cm
 async with cm.get_context() as ctx:
     ctx.edit_cell(ctx.cells[%d].id, ctx.cells[%d].code)
 ]], idx, idx)
-    kernel_execute(code)
+    kernel_execute(bufnr, code)
     vim.cmd("checktime")
-end)
+end
 
-function M.enable()
-    local bufnr = vim.api.nvim_get_current_buf()
-    local state = get_state(bufnr)
+function M.enable(bufnr)
+    bufnr = bufnr or vim.api.nvim_get_current_buf()
 
-    vim.api.nvim_buf_create_user_command(bufnr, "MarimoRefresh", function() M.refresh() end, {})
-    vim.api.nvim_buf_create_user_command(bufnr, "MarimoRun", function() M.run() end, {})
-    vim.api.nvim_buf_create_user_command(bufnr, "MarimoReformat", function() M.reformat() end, {})
-
-    vim.api.nvim_create_autocmd("BufDelete", {
-        buffer = bufnr,
-        callback = function()
-            if state.server_handle then
-                state.server_handle:kill(15)
-                state.server_handle = nil
-            end
-            buffer_states[bufnr] = nil
-        end
-    })
+    vim.api.nvim_buf_create_user_command(bufnr, "MarimoRefresh", function()
+        ASYNC.run(M.refresh, bufnr)
+    end, {})
+    vim.api.nvim_buf_create_user_command(bufnr, "MarimoRun", function()
+        ASYNC.run(M.run, bufnr)
+    end, {})
+    vim.api.nvim_buf_create_user_command(bufnr, "MarimoReformat", function()
+        ASYNC.run(M.reformat, bufnr)
+    end, {})
 
     local timer = nil
     vim.api.nvim_create_autocmd("BufWritePost", {
@@ -384,15 +399,25 @@ function M.enable()
                 timer:stop()
             end
             timer = vim.loop.new_timer()
-            timer:start(1000, 0, M.refresh)
+            timer:start(1000, 0, function() M.refresh(bufnr) end)
         end
     })
 
+    vim.print('Loading cells ...')
+    local cell_data = {}
+    local cells = get_cells_ts(bufnr)
+    for i = 1, #cells do
+        cell_data[i] = {status = 'loading'}
+    end
+    get_state(bufnr).cell_data = cell_data
+    render_cell_output(bufnr)
+
     ASYNC.run(function()
-        while subprocess({'curl', '--fail', '-s', '--unix-socket', MARIMO_SOCKET, 'http://asd/api/status'}).code ~= 0 do
+        while subprocess({'curl', '--fail', '-s', '--unix-socket', MARIMO_SOCKET, 'http://host/api/status'}, {}).code ~= 0 do
             ASYNC.sleep(0.1)
         end
-        M.refresh()
+        M.refresh(bufnr)
+        vim.print()
     end)
 
 end
