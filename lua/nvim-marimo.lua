@@ -32,6 +32,14 @@ local function get_cells_ts(bufnr)
               attribute: (identifier) @attr (#eq? @attr "cell")))
           definition: (function_definition
             name: (identifier) @name) ) @cell
+
+        (decorated_definition
+          (decorator
+            (call function: (attribute
+              object: (identifier) @obj (#eq? @obj "app")
+              attribute: (identifier) @attr (#eq? @attr "cell"))))
+          definition: (function_definition
+            name: (identifier) @name) ) @cell
     ]])
 
     local cells = {}
