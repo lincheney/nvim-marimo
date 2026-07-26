@@ -22,11 +22,17 @@ local function measure_screen_height(window, start_row, end_row)
         -- start at the bottom and move up
         vim.cmd('normal! ' .. end_row .. 'gg$g^')
 
+        local prev = nil
         while true do
             local cursor = vim.api.nvim_win_get_cursor(window)
             if cursor[1] == start_row and cursor[2] == 0 then
                 break
             end
+            if prev and cursor[1] == prev[1] and cursor[2] == prev[2] then
+                -- fail!
+                break
+            end
+            prev = cursor
 
             -- there are at least cursor[1] - start_row lines so do them all in one go
             -- do at least one row
