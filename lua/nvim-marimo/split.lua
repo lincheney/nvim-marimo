@@ -173,10 +173,10 @@ function M.render(bufnr, state)
 
         if data.console_outputs then
             for _, out in ipairs(data.console_outputs) do
-                local hl = (out.channel == "stderr") and "MarimoStderr" or "MarimoStdout"
                 local before = #lines
                 local trimmed = (out.data or ''):gsub('\n$', '')
                 if trimmed ~= '' then
+                    local hl = (out.channel == "stderr") and "MarimoStderr" or "MarimoStdout"
                     for line in vim.gsplit(trimmed, "\n") do
                         table.insert(lines, line)
                     end

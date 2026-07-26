@@ -2,6 +2,7 @@
 local M = {}
 
 local MARIMO_SOCKET = vim.env.MARIMO_SOCKET
+local NAMESPACE = vim.api.nvim_create_namespace("nvim-marimo")
 
 -- Buffer-local states
 local buffer_states = {}
@@ -391,6 +392,55 @@ async with cm.get_context() as ctx:
     end)
 end
 
+function M.open_float(bufnr)
+    local state = get_state(bufnr)
+    if not state then
+        return
+    end
+
+    local idx = get_current_cell_index(bufnr)
+    if not idx then
+        return
+    end
+
+    local data = state.cell_data[idx + 1]
+    if not data then
+        return
+    end
+
+    local floatbuf = vim.api.nvim_create_buf(false, true)
+
+    if data.console_outputs then
+        for _, out in ipairs(data.console_outputs) do
+            local trimmed = (out.data or ''):gsub('\n$', '')
+            if trimmed ~= '' then
+                local hl = (out.channel == "stderr") and "MarimoStderr" or "MarimoStdout"
+                local start = vim.api.nvim_buf_line_count(floatbuf)
+                local lines = vim.split(trimmed, '\n')
+                vim.api.nvim_buf_set_lines(floatbuf, -1, -1, true, lines)
+                vim.hl.range(floatbuf, NAMESPACE, hl, {start, 0}, {start + #lines + 1, #lines[#lines]})
+            end
+        end
+    end
+    -- delete first blank line
+    vim.api.nvim_buf_set_lines(floatbuf, 0, 1, true, {})
+
+    local status = data.status
+    if status == 'idle' then
+        status = 'success'
+    end
+
+    vim.api.nvim_open_win(floatbuf, true, {
+        relative = 'editor',
+        width = math.ceil(vim.o.columns / 2),
+        height = math.ceil(vim.o.lines / 2),
+        col = math.ceil(vim.o.columns / 4),
+        row = math.ceil(vim.o.lines / 4),
+        border = 'rounded',
+        title = ' ' .. status .. ' ',
+    })
+end
+
 function M.enable(bufnr)
     bufnr = bufnr or vim.api.nvim_get_current_buf()
     local state = get_state(bufnr)
@@ -406,6 +456,9 @@ function M.enable(bufnr)
     end, {})
     vim.api.nvim_buf_create_user_command(bufnr, "MarimoReformat", function()
         M.reformat(bufnr)
+    end, {})
+    vim.api.nvim_buf_create_user_command(bufnr, "MarimoOpenFloat", function()
+        M.open_float(bufnr)
     end, {})
 
     state.augroup = vim.api.nvim_create_augroup('nvim-marimo.'..bufnr, {clear = true})
