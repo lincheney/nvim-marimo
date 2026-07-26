@@ -16,8 +16,31 @@ local function setup_output_buffer(bufnr, state)
     return output_buf
 end
 
+local function measure_screen_height(window, start_row, end_row)
+    local height = 1
+    vim.api.nvim_win_call(window, function()
+        -- start at the bottom and move up
+        vim.cmd('normal! ' .. end_row .. 'gg$g^')
+
+        while true do
+            local cursor = vim.api.nvim_win_get_cursor(window)
+            if cursor[1] == start_row and cursor[2] == 0 then
+                break
+            end
+
+            -- there are at least cursor[1] - start_row lines so do them all in one go
+            -- do at least one row
+            local step = math.max(1, cursor[1] - start_row)
+            vim.cmd('normal! ' .. step .. 'gk')
+            height = height + step
+        end
+    end)
+
+    return height
+end
+
 local function sync_scroll(bufnr, state)
-    if state.scrolling then
+    if state.scrolling > 0 then
         return
     end
     local cells = state.get_cells_ts(bufnr)
@@ -38,7 +61,7 @@ local function sync_scroll(bufnr, state)
         return
     end
 
-    state.scrolling = true
+    state.scrolling = state.scrolling + 1
     local wininfo = vim.fn.getwininfo(active_win)[1]
 
     local active = (active_win == main_win) and cells or state.out_offsets
@@ -90,7 +113,7 @@ local function sync_scroll(bufnr, state)
         end
     end
 
-    state.scrolling = false
+    state.scrolling = state.scrolling - 1
 end
 
 function M.render(bufnr, state)
@@ -110,10 +133,14 @@ function M.render(bufnr, state)
     local line_offset = 0
     local numlines = 0
     local sep = string.rep('-', 9999)
+    local view = vim.api.nvim_win_call(state.main_win, vim.fn.winsaveview)
 
     vim.api.nvim_buf_clear_namespace(bufnr, NAMESPACE, 0, -1)
     vim.api.nvim_buf_clear_namespace(output_buf, NAMESPACE, 0, -1)
     vim.api.nvim_buf_set_lines(output_buf, 0, -1, false, {})
+
+    state.scrolling = state.scrolling + 1
+
     for i, cell_info in ipairs(cells) do
 
         vim.api.nvim_buf_set_extmark(bufnr, NAMESPACE, cell_info.start_row, 0, {virt_text = {{sep, 'Comment'}}})
@@ -128,6 +155,7 @@ function M.render(bufnr, state)
         local data = state.cell_data[i] or {status = "unknown"}
         local nextnonblank = vim.fn.nextnonblank(cell_info.end_row + 2)
         local cell_height = nextnonblank - cell_info.start_row - 1
+        local cell_screen_height = measure_screen_height(state.main_win, cell_info.start_row + 1, nextnonblank - 1)
 
         lines = {}
         table.insert(extmarks, {output_buf, NAMESPACE, numlines + #lines, 0, {hl_group = 'WarningMsg', end_row = numlines + #lines + 1, virt_text = {{sep, 'Comment'}}}})
@@ -152,29 +180,16 @@ function M.render(bufnr, state)
             -- finish = #lines,
             -- cell_height = cell_height,
         })
-        vim.api.nvim_win_set_cursor(state.output_win, {vim.api.nvim_buf_line_count(output_buf), 0})
         vim.api.nvim_buf_set_lines(output_buf, -1, -1, false, lines)
-        local output_height = #lines
-        vim.api.nvim_win_call(state.output_win, function()
-            -- keep moving down until no more to measure the height
-            vim.cmd('normal! ' .. #lines .. 'gj')
-            local prev = nil
-            while true do
-                local cursor = vim.api.nvim_win_get_cursor(state.output_win)
-                if prev and cursor[1] == prev[1] and cursor[2] == prev[2] then
-                    break
-                end
-                vim.cmd[[normal! gj]]
-                if prev then
-                    output_height = output_height + 1
-                end
-                prev = cursor
-            end
-        end)
-        line_offset = line_offset + output_height - #lines
+        local output_height = measure_screen_height(
+            state.output_win,
+            vim.api.nvim_buf_line_count(output_buf) - #lines + 1,
+            vim.api.nvim_buf_line_count(output_buf)
+        )
+        line_offset = line_offset + (output_height - #lines) - (cell_screen_height - cell_height)
         -- pad left with virt lines
         local virt_lines = {}
-        for _ = 1, output_height - cell_height do
+        for _ = 1, output_height - cell_screen_height do
             table.insert(virt_lines, {})
         end
         vim.api.nvim_buf_set_extmark(bufnr, NAMESPACE, cell_info.end_row, 0, {virt_lines = virt_lines})
@@ -193,7 +208,11 @@ function M.render(bufnr, state)
     for _, extmark in ipairs(extmarks) do
         vim.api.nvim_buf_set_extmark(unpack(extmark))
     end
+    vim.api.nvim_win_call(state.main_win, function()
+        vim.fn.winrestview(view)
+    end)
 
+    state.scrolling = state.scrolling - 1
     sync_scroll(bufnr, state)
 end
 
@@ -204,6 +223,7 @@ function M.enable(bufnr, state)
     vim.api.nvim_win_set_option(output_win, "scrolloff", 0)
     vim.api.nvim_win_set_option(output_win, "smoothscroll", true)
     state.output_win = output_win
+    state.scrolling = 0
 
     vim.api.nvim_create_autocmd("WinScrolled", {group = state.augroup, callback = function()
         for win, _ in pairs(vim.v.event) do
