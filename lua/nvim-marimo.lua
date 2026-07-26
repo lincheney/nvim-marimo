@@ -1,7 +1,6 @@
 -- luacheck: globals vim
 local M = {}
 
-local ASYNC = require('qianli.async')
 local MARIMO_SOCKET = vim.env.MARIMO_SOCKET
 local NAMESPACE = vim.api.nvim_create_namespace("marimo_output")
 
@@ -24,7 +23,7 @@ local function get_state(bufnr)
     if not buffer_states[bufnr] then
         buffer_states[bufnr] = {
             session_id = nil,
-            cell_data = {},
+            cell_data = nil,
             output_buf = nil,
             output_win = nil,
             scrolling = false,
@@ -34,63 +33,66 @@ local function get_state(bufnr)
     return buffer_states[bufnr]
 end
 
-local function subprocess(...)
-    local result = ASYNC.promisify(vim.system, ...)
-    ASYNC.promisify(vim.schedule)
-    return result
+local function check_session_exists(sid, file_path, callback)
+    vim.system({"curl", "--unix-socket", MARIMO_SOCKET, "-s", "--fail-with-body", "http://host/api/sessions"}, function(out)
+        if out.code ~= 0 then
+            return callback(false)
+        end
+        local ok, sessions = pcall(vim.json.decode, out.stdout)
+        callback(ok and sessions and sessions[sid] and sessions[sid].path == file_path)
+    end)
 end
 
-local function check_session_exists(sid, file_path)
-    local obj = subprocess({"curl", "--unix-socket", MARIMO_SOCKET, "-s", "--fail-with-body", "http://host/api/sessions"})
-    if obj.code ~= 0 then
-        return false
-    end
-    local ok, sessions = pcall(vim.json.decode, obj.stdout)
-    return ok and sessions and sessions[sid] and sessions[sid].path == file_path
-end
-
-local function get_session_id(bufnr)
+local function get_session_id(bufnr, callback)
     local state = get_state(bufnr)
     if not state then
+        callback()
         return
     end
     if state.session_id then
-        return state.session_id
+        callback(state.session_id)
+        return
     end
 
     local file_path = vim.api.nvim_buf_get_name(0)
     if file_path == "" then
+        callback()
         return
     end
 
-    local obj = subprocess({"curl", "--unix-socket", MARIMO_SOCKET, "-s", "--fail", "http://host/api/sessions"})
-    if obj.code == 0 then
-        local ok, sessions = pcall(vim.json.decode, obj.stdout)
-        if ok and sessions then
-            for id, info in pairs(sessions) do
-                if info.path == file_path then
-                    state.session_id = id
-                    return state.session_id
+    vim.system({"curl", "--unix-socket", MARIMO_SOCKET, "-s", "--fail", "http://host/api/sessions"}, function(out)
+        if out.code == 0 then
+            local ok, sessions = pcall(vim.json.decode, out.stdout)
+            if ok and sessions then
+                for id, info in pairs(sessions) do
+                    if info.path == file_path then
+                        state.session_id = id
+                        callback(state.session_id)
+                        return
+                    end
                 end
             end
         end
-    end
 
-    local session_id = "s_" .. math.random()
-    subprocess({
-        "curl", "--unix-socket", MARIMO_SOCKET, "-s", "--fail", "-m0.5",
-        "ws://host/ws?file=" .. urlencode(file_path) .. "&session_id=" .. urlencode(session_id)
-    })
+        local session_id = "s_" .. math.random()
+        vim.system({
+            "curl", "--unix-socket", MARIMO_SOCKET, "-s", "--fail", "-m0.5",
+            "ws://host/ws?file=" .. urlencode(file_path) .. "&session_id=" .. urlencode(session_id)
+        }, function(_)
+            check_session_exists(session_id, file_path, function(exists)
+                if exists then
+                    state.session_id = session_id
+                else
+                    vim.schedule(function()
+                        print_error('failed to start marimo session for ' .. file_path)
+                    end)
+                end
+                callback(state.session_id)
+            end)
 
-    if check_session_exists(session_id, file_path) then
-        state.session_id = session_id
-    else
-        vim.schedule(function()
-            print_error('failed to start marimo session for ' .. file_path)
         end)
-    end
+    end)
 
-    return state.session_id
 end
 
 local function get_cells_ts(bufnr)
@@ -133,56 +135,57 @@ local function get_current_cell_index(bufnr)
     end
 end
 
-local function kernel_execute(bufnr, code, callback)
-    local sid = get_session_id(bufnr)
-    if not sid then
-        return
-    end
-
-    local payload = vim.fn.json_encode({code = code})
-    return subprocess({
-        "curl", "--unix-socket", MARIMO_SOCKET, "-s", "--fail", "-N", "http://host/api/kernel/execute",
-        "-H", "Content-Type: application/json",
-        "-H", "Marimo-Session-Id: " .. sid,
-        "-d", payload
-    }, {
-        stdout = function(_, data)
-            if not data then
-                return
-            end
-
-            local is_stdout = false
-
-            local process = ASYNC.wrap(function(line)
-                local sse_event = line:match("^event: (.*)")
-                if sse_event then
-                    is_stdout = sse_event == 'stdout'
-                    return
-                end
-
-                local sse_data = line:match("^data: (.*)")
-                if not sse_data then
-                    return
-                end
-
-                local ok, decoded = pcall(vim.json.decode, sse_data)
-                if not ok or not decoded or not decoded.data then
-                    return
-                end
-
-                if callback then
-                    callback(decoded.data, is_stdout)
-                elseif not is_stdout then
-                    print_error(vim.trim(decoded.data))
-                end
-            end)
-
-            for line in vim.gsplit(data, '\n') do
-                process(line)
-            end
-
+local function kernel_execute(bufnr, code, out_callback, done_callback)
+    get_session_id(bufnr, function(sid)
+        if not sid then
+            return
         end
-    })
+
+        local payload = vim.json.encode({code = code})
+        vim.system({
+            "curl", "--unix-socket", MARIMO_SOCKET, "-s", "--fail", "-N", "http://host/api/kernel/execute",
+            "-H", "Content-Type: application/json",
+            "-H", "Marimo-Session-Id: " .. sid,
+            "-d", payload
+        }, {
+            stdout = function(_, data)
+                if not data then
+                    return
+                end
+
+                local is_stdout = false
+
+                local process = function(line)
+                    local sse_event = line:match("^event: (.*)")
+                    if sse_event then
+                        is_stdout = sse_event == 'stdout'
+                        return
+                    end
+
+                    local sse_data = line:match("^data: (.*)")
+                    if not sse_data then
+                        return
+                    end
+
+                    local ok, decoded = pcall(vim.json.decode, sse_data)
+                    if not ok or not decoded or not decoded.data then
+                        return
+                    end
+
+                    if out_callback then
+                        out_callback(decoded.data, is_stdout)
+                    elseif not is_stdout then
+                        print_error(vim.trim(decoded.data))
+                    end
+                end
+
+                for line in vim.gsplit(data, '\n') do
+                    process(line)
+                end
+
+            end
+        }, done_callback)
+    end)
 end
 
 local function setup_output_buffer(bufnr)
@@ -276,7 +279,7 @@ end
 
 local function render_cell_output(bufnr)
     local state = get_state(bufnr)
-    if not state then
+    if not state or not state.cell_data then
         return
     end
 
@@ -377,9 +380,10 @@ local function render_cell_output(bufnr)
     sync_scroll(bufnr)
 end
 
-local function refresh(bufnr)
+function M.refresh(bufnr, callback)
     local state = get_state(bufnr)
     if not state then
+        callback()
         return
     end
 
@@ -406,13 +410,22 @@ async with cm.get_context() as ctx:
                 state.cell_data = cell_data
             end
         end
+    end, function()
+        vim.schedule(function()
+            render_cell_output(bufnr)
+            if callback then
+                callback()
+            end
+        end)
     end)
-    render_cell_output(bufnr)
 end
 
-local function run(bufnr)
+function M.run(bufnr, callback)
     local idx = get_current_cell_index(bufnr)
     if not idx then
+        if callback then
+            callback()
+        end
         return
     end
     local code = string.format(--[[python--]] [[
@@ -447,10 +460,8 @@ async with cm.get_context() as ctx:
                 to_run = jsondata
             end
         end
-    end)
-
-    for _, id in ipairs(to_run) do
-        code = string.format(--[[python--]] [[
+    end, function()
+        local code_template = --[[python--]] [[
 import marimo._code_mode as cm
 import json
 async with cm.get_context() as ctx:
@@ -463,9 +474,9 @@ async with cm.get_context() as ctx:
     # Verify if cell still exists and has errors after run
     if cell and any(o.channel == "stderr" for o in cell.console_outputs):
         print(f"ERROR:{name}")
-]], id)
+]]
         local failed = false
-        kernel_execute(bufnr, code, function(data)
+        local function line_callback(data)
             for line in vim.gsplit(data, "\n") do
                 local running = line:match("^RUNNING:(.*)")
                 if running then
@@ -481,47 +492,45 @@ async with cm.get_context() as ctx:
                     end
                 end
             end
-        end)
-        if failed then
-            break
         end
-    end
-    refresh(bufnr)
+        local done_callback
+        function done_callback(i)
+            vim.schedule(function()
+                if failed or i > #to_run then
+                    M.refresh(bufnr, callback)
+                else
+                    kernel_execute(bufnr, string.format(code_template, to_run[i]), line_callback, function() done_callback(i + 1) end)
+                end
+            end)
+        end
+        done_callback(1)
+    end)
+
 end
 
-local function reformat(bufnr)
+function M.reformat(bufnr, callback)
     local idx = get_current_cell_index(bufnr)
     if not idx then
         return
     end
-    local sid = get_session_id(bufnr)
-    if not sid then
-        return
-    end
-    local code = string.format(--[[python--]] [[
+    get_session_id(bufnr, function(sid)
+        if not sid then
+            if callback then
+                callback()
+            end
+            return
+        end
+        local code = string.format(--[[python--]] [[
 import marimo._code_mode as cm
 async with cm.get_context() as ctx:
     ctx.edit_cell(ctx.cells[%d].id, ctx.cells[%d].code)
 ]], idx, idx)
-    kernel_execute(bufnr, code)
-    vim.cmd("checktime")
-end
-
-M.refresh = function(bufnr)
-    vim.schedule(function()
-        ASYNC.run(refresh,bufnr)
-    end)
-end
-
-M.run = function(bufnr)
-    vim.schedule(function()
-        ASYNC.run(run,bufnr)
-    end)
-end
-
-M.reformat = function(bufnr)
-    vim.schedule(function()
-        ASYNC.run(reformat, bufnr)
+        kernel_execute(bufnr, code, function()
+            vim.cmd("checktime")
+            if callback then
+                callback()
+            end
+        end)
     end)
 end
 
@@ -592,11 +601,7 @@ function M.enable(bufnr)
     end
     state.cell_data = cell_data
     render_cell_output(bufnr)
-    ASYNC.run(function()
-        while subprocess({'curl', '--fail', '-s', '--unix-socket', MARIMO_SOCKET, 'http://host/api/status'}, {}).code ~= 0 do
-            ASYNC.sleep(0.1)
-        end
-        refresh(bufnr)
+    M.refresh(bufnr, function()
         print()
     end)
 end
