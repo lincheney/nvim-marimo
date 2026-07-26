@@ -306,12 +306,16 @@ async with cm.get_context() as ctx:
             end)
         end
     end, function()
+        local marker = tostring(math.random()) .. ':'
         local code_template = --[[python--]] [[
 import marimo._code_mode as cm
 import json
 async with cm.get_context() as ctx:
-    ctx.run_cell(%q)
+    id = %q
+    cell_lookup = {c.id: c for c in ctx.cells}
+    ctx.run_cell(id)
     ctx._print_summary = lambda *a, **kw: None
+print(%q + cell_lookup[id].status)
 ]]
         local failed = false
         local function line_callback(i, data, type)
@@ -320,7 +324,11 @@ async with cm.get_context() as ctx:
                 return
             end
 
-            table.insert(state.cell_data[i].console_outputs, {channel = type, data = data.data})
+            if data.data:find(marker, 1, true) == 1 then
+                state.cell_data[i].status = data.data:sub(#marker + 1):gsub('\n', '')
+            else
+                table.insert(state.cell_data[i].console_outputs, {channel = type, data = data.data})
+            end
             vim.schedule(function()
                 render(bufnr)
             end)
@@ -336,7 +344,7 @@ async with cm.get_context() as ctx:
                     render(bufnr)
                     kernel_execute(
                         bufnr,
-                        string.format(code_template, to_run[i][1]),
+                        string.format(code_template, to_run[i][1], marker),
                         function(...) line_callback(to_run[i][3] + 1, ...) end,
                         function() done_callback(i + 1) end
                     )
