@@ -6,6 +6,10 @@ local MARIMO_SOCKET = vim.env.MARIMO_SOCKET
 -- Buffer-local states
 local buffer_states = {}
 
+local function print_error(str)
+    vim.api.nvim_echo({{str}}, true, {err = true})
+end
+
 local function urlencode(str)
     return string.gsub(str, "([^%w%-%_%.])", function(c)
         return string.format("%%%02X", string.byte(c))
@@ -298,7 +302,7 @@ async with cm.get_context() as ctx:
             end
         elseif type == 'stderr' then
             vim.schedule(function()
-            vim.api.nvim_echo({{vim.trim(data.data)}}, true, {err = true})
+                print_error(vim.trim(data.data))
             end)
         end
     end, function()
