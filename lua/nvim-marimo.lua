@@ -175,7 +175,9 @@ local function kernel_execute(bufnr, code, out_callback, done_callback)
                     if out_callback then
                         out_callback(decoded, type)
                     elseif type == 'stderr' then
-                        print_error(vim.trim(decoded.data))
+                        vim.schedule(function()
+                            print_error(vim.trim(decoded.data))
+                        end)
                     end
                 end
 
@@ -227,7 +229,9 @@ async with cm.get_context() as ctx:
                 cell_data = cd
             end
         elseif data.data then
-            print_error(vim.trim(data.data))
+            vim.schedule(function()
+                print_error(vim.trim(data.data))
+            end)
         end
     end, function()
         vim.schedule(function()
@@ -241,6 +245,11 @@ async with cm.get_context() as ctx:
 end
 
 function M.run(bufnr, callback)
+    local state = get_state(bufnr)
+    if not state then
+        return
+    end
+
     local idx = get_current_cell_index(bufnr)
     if not idx then
         if callback then
@@ -251,28 +260,35 @@ function M.run(bufnr, callback)
 
     local code = string.format(--[[python--]] [[
 import marimo._code_mode as cm
+from marimo._runtime.commands import ExecuteCellCommand
 import json
+
 async with cm.get_context() as ctx:
-    target_id = ctx.cells[%d].id
+    i = %d
     to_run = []
     visited = set()
     # Map for easy lookup of cell objects by ID
-    cell_lookup = {c.id: c for c in ctx.cells}
-    def collect(cid):
-        if cid in visited:
+    cell_lookup = {c.id: (i, c) for (i, c) in enumerate(ctx.cells)}
+
+    cmds = [ExecuteCellCommand(cell_id=cell.id, code=cell.code) for cell in ctx.cells]
+    ctx._kernel.mutate_graph(cmds, ())
+
+    def collect(cell, idx):
+        if cell.id in visited:
             return
-        visited.add(cid)
-        parents = ctx.graph.parents.get(cid, [])
+        visited.add(cell.id)
+        parents = ctx.graph.parents.get(cell.id, ())
         for pid in parents:
             # Check staleness via ctx.cells status
-            p_cell = cell_lookup.get(pid)
+            i, p_cell = cell_lookup.get(pid)
             if p_cell and p_cell.status == "stale":
-                collect(pid)
-        if cid not in to_run:
-            to_run.append(cid)
-    collect(target_id)
+                collect(p_cell, i)
+        if cell.id not in to_run:
+            to_run.append([cell.id, cell.name, idx])
+    collect(ctx.cells[i], i)
     print(json.dumps(to_run))
-]], idx)
+]], idx, idx)
+
     local to_run = {}
     kernel_execute(bufnr, code, function(data, type)
         if type == 'stdout' then
@@ -280,32 +296,30 @@ async with cm.get_context() as ctx:
             if ok then
                 to_run = jsondata
             end
+        elseif type == 'stderr' then
+            vim.schedule(function()
+            vim.api.nvim_echo({{vim.trim(data.data)}}, true, {err = true})
+            end)
         end
     end, function()
         local code_template = --[[python--]] [[
 import marimo._code_mode as cm
 import json
 async with cm.get_context() as ctx:
-    cell_lookup = {c.id: c for c in ctx.cells}
-    cid = %q
-    cell = cell_lookup.get(cid)
-    name = cell.name if cell else cid
-    print(f"RUNNING:{name}")
-    ctx.run_cell(cid)
+    ctx.run_cell(%q)
+    ctx._print_summary = lambda *a, **kw: None
 ]]
         local failed = false
-        local function line_callback(data, type)
+        local function line_callback(i, data, type)
             if type == 'done' then
                 failed = data.success
                 return
             end
 
-            for line in vim.gsplit(data.data, "\n") do
-                local running = line:match("^RUNNING:(.*)")
-                if running then
-                    print("Executing " .. vim.trim(running))
-                end
-            end
+            table.insert(state.cell_data[i].console_outputs, {channel = type, data = data.data})
+            vim.schedule(function()
+                render(bufnr)
+            end)
         end
         local done_callback
         function done_callback(i)
@@ -313,7 +327,15 @@ async with cm.get_context() as ctx:
                 if failed or i > #to_run then
                     M.refresh(bufnr, callback)
                 else
-                    kernel_execute(bufnr, string.format(code_template, to_run[i]), line_callback, function() done_callback(i + 1) end)
+                    print("Executing " .. to_run[i][2])
+                    state.cell_data[to_run[i][3] + 1] = {status = 'running', console_outputs = {}}
+                    render(bufnr)
+                    kernel_execute(
+                        bufnr,
+                        string.format(code_template, to_run[i][1]),
+                        function(...) line_callback(to_run[i][3] + 1, ...) end,
+                        function() done_callback(i + 1) end
+                    )
                 end
             end)
         end
