@@ -1,6 +1,7 @@
 local M = {}
 
 local NAMESPACE = vim.api.nvim_create_namespace("nvim-marimo.virt_lines")
+local MAX_LINES = 10
 local SEP = string.rep('─', 9999)
 
 function M.render(bufnr, state)
@@ -40,6 +41,14 @@ function M.render(bufnr, state)
             end
         end
         if #virt_lines > 1 then
+            if #virt_lines > MAX_LINES + 1 then
+                local overflow = #virt_lines - MAX_LINES - 1 - 1
+                virt_lines[2] = {{'... ' .. overflow .. ' more lines', 'MarimoFolded'}}
+                for _ = 1, overflow - 1 do
+                    table.remove(virt_lines, 3)
+                end
+            end
+
             table.insert(virt_lines[1], 1, {'╭─', 'MarimoBorder'})
             for j = 2, #virt_lines do
                 table.insert(virt_lines[j], 1, {'│ ', 'MarimoBorder'})

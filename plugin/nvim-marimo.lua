@@ -1,6 +1,7 @@
 vim.api.nvim_set_hl(0, 'MarimoStderr', {default = true, link = 'DiagnosticError'})
 vim.api.nvim_set_hl(0, 'MarimoStdout', {default = true})
 vim.api.nvim_set_hl(0, 'MarimoBorder', {default = true, fg = 'NvimDarkGrey4'})
+vim.api.nvim_set_hl(0, 'MarimoFolded', {default = true, link = 'Folded'})
 
 for k, v in pairs{
     MarimoStatus_stale = 'DiagnosticWarn',
