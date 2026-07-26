@@ -153,12 +153,12 @@ local function kernel_execute(bufnr, code, out_callback, done_callback)
                     return
                 end
 
-                local is_stdout = false
+                local type = nil
 
                 local process = function(line)
                     local sse_event = line:match("^event: (.*)")
                     if sse_event then
-                        is_stdout = sse_event == 'stdout'
+                        type = sse_event
                         return
                     end
 
@@ -173,8 +173,8 @@ local function kernel_execute(bufnr, code, out_callback, done_callback)
                     end
 
                     if out_callback then
-                        out_callback(decoded.data, is_stdout)
-                    elseif not is_stdout then
+                        out_callback(decoded, type)
+                    elseif type == 'stderr' then
                         print_error(vim.trim(decoded.data))
                     end
                 end
@@ -220,14 +220,14 @@ async with cm.get_context() as ctx:
     print(json.dumps(res))
 ]]
     local cell_data = nil
-    kernel_execute(bufnr, code, function(data, is_stdout)
-        if not is_stdout then
-            print_error(vim.trim(data))
-        else
-            local ok, cd = pcall(vim.json.decode, data)
+    kernel_execute(bufnr, code, function(data, type)
+        if type == 'stdout' then
+            local ok, cd = pcall(vim.json.decode, data.data)
             if ok then
                 cell_data = cd
             end
+        elseif data.data then
+            print_error(vim.trim(data.data))
         end
     end, function()
         vim.schedule(function()
@@ -248,6 +248,7 @@ function M.run(bufnr, callback)
         end
         return
     end
+
     local code = string.format(--[[python--]] [[
 import marimo._code_mode as cm
 import json
@@ -273,9 +274,9 @@ async with cm.get_context() as ctx:
     print(json.dumps(to_run))
 ]], idx)
     local to_run = {}
-    kernel_execute(bufnr, code, function(data, is_stdout)
-        if is_stdout then
-            local ok, jsondata = pcall(vim.json.decode, data)
+    kernel_execute(bufnr, code, function(data, type)
+        if type == 'stdout' then
+            local ok, jsondata = pcall(vim.json.decode, data.data)
             if ok then
                 to_run = jsondata
             end
@@ -291,25 +292,18 @@ async with cm.get_context() as ctx:
     name = cell.name if cell else cid
     print(f"RUNNING:{name}")
     ctx.run_cell(cid)
-    # Verify if cell still exists and has errors after run
-    if cell and any(o.channel == "stderr" for o in cell.console_outputs):
-        print(f"ERROR:{name}")
 ]]
         local failed = false
-        local function line_callback(data)
-            for line in vim.gsplit(data, "\n") do
+        local function line_callback(data, type)
+            if type == 'done' then
+                failed = data.success
+                return
+            end
+
+            for line in vim.gsplit(data.data, "\n") do
                 local running = line:match("^RUNNING:(.*)")
                 if running then
                     print("Executing " .. vim.trim(running))
-                else
-                    failed = true
-                    local error = line:match("^ERROR:(.*)")
-                    if error then
-                        vim.schedule(function()
-                            print_error("Error in cell: " .. vim.trim(error))
-                        end)
-                        return
-                    end
                 end
             end
         end
@@ -345,7 +339,7 @@ import marimo._code_mode as cm
 async with cm.get_context() as ctx:
     ctx.edit_cell(ctx.cells[%d].id, ctx.cells[%d].code)
 ]], idx, idx)
-        kernel_execute(bufnr, code, function()
+        kernel_execute(bufnr, code, nil, function()
             vim.cmd("checktime")
             if callback then
                 callback()
@@ -391,7 +385,9 @@ function M.enable(bufnr)
             end
             timer = vim.loop.new_timer()
             timer:start(1000, 0, function()
-                M.refresh(bufnr)
+                vim.schedule(function()
+                    M.refresh(bufnr)
+                end)
             end)
         end
     })
