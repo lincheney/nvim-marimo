@@ -1,7 +1,7 @@
 local M = {}
 
 local NAMESPACE = vim.api.nvim_create_namespace("nvim-marimo.split")
-local SEP = string.rep('-', 9999)
+local SEP = string.rep('─', 9999)
 
 local function setup_output_buffer(bufnr, state)
     if state.output_buf and vim.api.nvim_buf_is_valid(state.output_buf) then
@@ -149,7 +149,7 @@ function M.render(bufnr, state)
 
     for i, cell_info in ipairs(cells) do
 
-        vim.api.nvim_buf_set_extmark(bufnr, NAMESPACE, cell_info.start_row, 0, {virt_text = {{SEP, 'Comment'}}})
+        vim.api.nvim_buf_set_extmark(bufnr, NAMESPACE, cell_info.start_row, 0, {virt_text = {{SEP, 'MarimoBorder'}}})
 
         local lines = {}
         while numlines + #lines + line_offset < cell_info.start_row do
@@ -164,12 +164,16 @@ function M.render(bufnr, state)
         local cell_screen_height = measure_screen_height(state.main_win, cell_info.start_row + 1, nextnonblank - 1)
 
         lines = {}
-        table.insert(extmarks, {output_buf, NAMESPACE, numlines + #lines, 0, {hl_group = 'WarningMsg', end_row = numlines + #lines + 1, virt_text = {{SEP, 'Comment'}}}})
-        table.insert(lines, '[' .. data.status:upper() .. ']')
+        local status = data.status
+        if status == 'idle' then
+            status = 'success'
+        end
+        table.insert(extmarks, {output_buf, NAMESPACE, numlines + #lines, 0, {hl_group = 'MarimoStatus_' .. data.status:gsub('%-', '_'), end_row = numlines + #lines + 1, virt_text = {{SEP, 'MarimoBorder'}}}})
+        table.insert(lines, '(' .. status .. ')')
 
         if data.console_outputs then
             for _, out in ipairs(data.console_outputs) do
-                local hl = (out.channel == "stderr") and "ErrorMsg" or ""
+                local hl = (out.channel == "stderr") and "MarimoStderr" or "MarimoStdout"
                 local before = #lines
                 local trimmed = (out.data or ''):gsub('\n$', '')
                 if trimmed ~= '' then
