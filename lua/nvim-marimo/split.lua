@@ -1,6 +1,7 @@
 local M = {}
 
 local NAMESPACE = vim.api.nvim_create_namespace("nvim-marimo.split")
+local SEP = string.rep('-', 9999)
 
 local function setup_output_buffer(bufnr, state)
     if state.output_buf and vim.api.nvim_buf_is_valid(state.output_buf) then
@@ -138,7 +139,6 @@ function M.render(bufnr, state)
     local out_offsets = {}
     local line_offset = 0
     local numlines = 0
-    local sep = string.rep('-', 9999)
     local view = vim.api.nvim_win_call(state.main_win, vim.fn.winsaveview)
 
     vim.api.nvim_buf_clear_namespace(bufnr, NAMESPACE, 0, -1)
@@ -149,7 +149,7 @@ function M.render(bufnr, state)
 
     for i, cell_info in ipairs(cells) do
 
-        vim.api.nvim_buf_set_extmark(bufnr, NAMESPACE, cell_info.start_row, 0, {virt_text = {{sep, 'Comment'}}})
+        vim.api.nvim_buf_set_extmark(bufnr, NAMESPACE, cell_info.start_row, 0, {virt_text = {{SEP, 'Comment'}}})
 
         local lines = {}
         while numlines + #lines + line_offset < cell_info.start_row do
@@ -164,7 +164,7 @@ function M.render(bufnr, state)
         local cell_screen_height = measure_screen_height(state.main_win, cell_info.start_row + 1, nextnonblank - 1)
 
         lines = {}
-        table.insert(extmarks, {output_buf, NAMESPACE, numlines + #lines, 0, {hl_group = 'WarningMsg', end_row = numlines + #lines + 1, virt_text = {{sep, 'Comment'}}}})
+        table.insert(extmarks, {output_buf, NAMESPACE, numlines + #lines, 0, {hl_group = 'WarningMsg', end_row = numlines + #lines + 1, virt_text = {{SEP, 'Comment'}}}})
         table.insert(lines, '[' .. data.status:upper() .. ']')
 
         if data.console_outputs then

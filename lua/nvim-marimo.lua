@@ -16,6 +16,11 @@ local function urlencode(str)
     end)
 end
 
+local function get_render_backend()
+    return require('nvim-marimo.virt_lines')
+    -- return require('nvim-marimo.split')
+end
+
 local function get_cells_ts(bufnr)
     local ok, parser = pcall(vim.treesitter.get_parser, bufnr, "python")
     if not ok then
@@ -200,10 +205,6 @@ local function kernel_execute(bufnr, code, out_callback, done_callback)
             end
         }, done_callback)
     end)
-end
-
-local function get_render_backend()
-    return require('nvim-marimo.split')
 end
 
 local function render(bufnr)
