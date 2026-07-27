@@ -15,7 +15,9 @@ local function clean_output(out)
         return nil
     end
     local data = out.data
-    if out.mimetype == "text/html" then
+    if out.channel == 'marimo-error' and type(data) == 'table' then
+        data = table.concat(vim.tbl_map(function(x) return x.msg end, data), ' ')
+    elseif out.mimetype == "text/html" or (out.mimetype ~= 'text/plain' and data:find('^<')) then
         data = data:gsub("<[^>]+>", "")
     end
     return data
@@ -252,14 +254,15 @@ async with cm.get_context() as ctx:
         res.append({
             "status": c.status,
             "output": c.output.asdict() if c.output else None,
-            "console_outputs": [o.asdict() for o in c.console_outputs]
+            "console_outputs": [o.asdict() for o in c.console_outputs],
+            "errors": [o.msg for o in c.errors],
         })
     print(json.dumps(res))
 ]]
     local cell_data = nil
     kernel_execute(state, bufnr, code, function(data, type)
         if type == 'stdout' then
-            local ok, cd = pcall(vim.json.decode, data.data)
+            local ok, cd = pcall(vim.json.decode, data.data, {luanil = {object = true}})
             if ok then
                 for _, cell in ipairs(cd) do
                     local outputs = {}
@@ -269,11 +272,14 @@ async with cm.get_context() as ctx:
                             table.insert(outputs, {channel = o.channel or "stdout", data = cleaned})
                         end
                     end
-                    if cell.output then
+                    if cell.output and (cell.output.channel ~= 'marimo-error' or #cell.errors == 0) then
                         local cleaned = clean_output(cell.output)
                         if cleaned then
                             table.insert(outputs, {channel = cell.output.channel or "output", data = cleaned})
                         end
+                    end
+                    for _, e in ipairs(cell.errors) do
+                        table.insert(outputs, {channel = "marimo-error", data = e})
                     end
                     cell.console_outputs = outputs
                 end

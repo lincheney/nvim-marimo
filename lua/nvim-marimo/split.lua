@@ -176,7 +176,7 @@ function M.render(bufnr, state)
                 local before = #lines
                 local trimmed = (out.data or ''):gsub('\n$', '')
                 if trimmed ~= '' then
-                    local hl = (out.channel == "stderr") and "MarimoStderr" or "MarimoStdout"
+                    local hl = (out.channel == "stderr" or out.channel == 'marimo-error') and "MarimoStderr" or "MarimoStdout"
                     for line in vim.gsplit(trimmed, "\n") do
                         table.insert(lines, line)
                     end
