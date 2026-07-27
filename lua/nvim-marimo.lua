@@ -16,6 +16,19 @@ local function urlencode(str)
     end)
 end
 
+local function clean_output(out)
+    if not out or not out.data then
+        return nil
+    end
+    local data = out.data
+    if out.channel == 'marimo-error' and type(data) == 'table' then
+        data = table.concat(vim.tbl_map(function(x) return x.msg end, data), ' ')
+    elseif out.mimetype == "text/html" or (out.mimetype ~= 'text/plain' and data:find('^<')) then
+        data = data:gsub("<[^>]+>", "")
+    end
+    return data
+end
+
 local function get_free_port()
     local tcp = vim.uv.new_tcp()
     tcp:bind('127.0.0.1', 0)
