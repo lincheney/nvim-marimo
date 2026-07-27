@@ -10,6 +10,17 @@ local function print_error(str)
     vim.api.nvim_echo({{str}}, true, {err = true})
 end
 
+local function clean_output(out)
+    if not out or not out.data then
+        return nil
+    end
+    local data = out.data
+    if out.mimetype == "text/html" then
+        data = data:gsub("<[^>]+>", "")
+    end
+    return data
+end
+
 local function urlencode(str)
     return string.gsub(str, "([^%w%-%_%.])", function(c)
         return string.format("%%%02X", string.byte(c))
@@ -240,6 +251,7 @@ async with cm.get_context() as ctx:
     for c in ctx.cells:
         res.append({
             "status": c.status,
+            "output": c.output.asdict() if c.output else None,
             "console_outputs": [o.asdict() for o in c.console_outputs]
         })
     print(json.dumps(res))
@@ -249,6 +261,22 @@ async with cm.get_context() as ctx:
         if type == 'stdout' then
             local ok, cd = pcall(vim.json.decode, data.data)
             if ok then
+                for _, cell in ipairs(cd) do
+                    local outputs = {}
+                    for _, o in ipairs(cell.console_outputs) do
+                        local cleaned = clean_output(o)
+                        if cleaned then
+                            table.insert(outputs, {channel = o.channel or "stdout", data = cleaned})
+                        end
+                    end
+                    if cell.output then
+                        local cleaned = clean_output(cell.output)
+                        if cleaned then
+                            table.insert(outputs, {channel = cell.output.channel or "output", data = cleaned})
+                        end
+                    end
+                    cell.console_outputs = outputs
+                end
                 cell_data = cd
             end
         elseif data.data then
@@ -346,7 +374,10 @@ print(%q + cell_lookup[id].status)
             if data.data:find(marker, 1, true) == 1 then
                 state.cell_data[i].status = data.data:sub(#marker + 1):gsub('\n', '')
             else
-                table.insert(state.cell_data[i].console_outputs, {channel = type, data = data.data})
+                local cleaned = clean_output(data)
+                if cleaned then
+                    table.insert(state.cell_data[i].console_outputs, {channel = data.channel or type, data = cleaned})
+                end
             end
             vim.schedule(function()
                 render(bufnr)
