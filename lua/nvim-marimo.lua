@@ -10,19 +10,6 @@ local function print_error(str)
     vim.api.nvim_echo({{str}}, true, {err = true})
 end
 
-local function clean_output(out)
-    if not out or not out.data then
-        return nil
-    end
-    local data = out.data
-    if out.channel == 'marimo-error' and type(data) == 'table' then
-        data = table.concat(vim.tbl_map(function(x) return x.msg end, data), ' ')
-    elseif out.mimetype == "text/html" or (out.mimetype ~= 'text/plain' and data:find('^<')) then
-        data = data:gsub("<[^>]+>", "")
-    end
-    return data
-end
-
 local function urlencode(str)
     return string.gsub(str, "([^%w%-%_%.])", function(c)
         return string.format("%%%02X", string.byte(c))
@@ -247,14 +234,25 @@ function M.refresh(bufnr, callback)
     local code = --[[python--]] [[
 import marimo._code_mode as cm
 import json
+import html
+import re
+
+def clean(val):
+    if val.get('data'):
+        if val['channel'] == 'marimo-error' and isinstance(val['data'], list):
+            val['data'] = ' '.join(x['msg'] for x in val['data'])
+        elif val['mimetype'] == "text/html" or (val['mimetype'] != 'text/plain' and val['data'].startswith('<')):
+            val['data'] = html.unescape(re.sub('<[^>]+>', '', val['data']))
+    return val
+
 async with cm.get_context() as ctx:
     res = []
     # Build a lookup for cell status directly from ctx.cells
     for c in ctx.cells:
         res.append({
             "status": c.status,
-            "output": c.output.asdict() if c.output else None,
-            "console_outputs": [o.asdict() for o in c.console_outputs],
+            "output": clean(c.output.asdict()) if c.output else None,
+            "console_outputs": [clean(o.asdict()) for o in c.console_outputs],
             "errors": [o.msg for o in c.errors],
         })
     print(json.dumps(res))
@@ -267,16 +265,12 @@ async with cm.get_context() as ctx:
                 for _, cell in ipairs(cd) do
                     local outputs = {}
                     for _, o in ipairs(cell.console_outputs) do
-                        local cleaned = clean_output(o)
-                        if cleaned then
-                            table.insert(outputs, {channel = o.channel or "stdout", data = cleaned})
+                        if o.data then
+                            table.insert(outputs, o)
                         end
                     end
-                    if cell.output and (cell.output.channel ~= 'marimo-error' or #cell.errors == 0) then
-                        local cleaned = clean_output(cell.output)
-                        if cleaned then
-                            table.insert(outputs, {channel = cell.output.channel or "output", data = cleaned})
-                        end
+                    if cell.output and (cell.output.channel ~= 'marimo-error' or #cell.errors == 0) and cell.output.data then
+                        table.insert(outputs, cell.output)
                     end
                     for _, e in ipairs(cell.errors) do
                         table.insert(outputs, {channel = "marimo-error", data = e})
