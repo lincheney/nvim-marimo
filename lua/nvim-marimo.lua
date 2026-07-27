@@ -47,20 +47,22 @@ local function get_cells_ts(bufnr)
 
     local query = vim.treesitter.query.parse("python", [[
         (decorated_definition
-          (decorator
-            (attribute
-              object: (identifier) @obj (#eq? @obj "app")
-              attribute: (identifier) @attr (#eq? @attr "cell")))
-          definition: (function_definition
-            name: (identifier) @name) ) @cell
+            (decorator (attribute
+                object: (identifier) @obj (#eq? @obj "app")
+                attribute: (identifier) @attr (#eq? @attr "cell")))
+        ) @cell
 
         (decorated_definition
-          (decorator
-            (call function: (attribute
-              object: (identifier) @obj (#eq? @obj "app")
-              attribute: (identifier) @attr (#eq? @attr "cell"))))
-          definition: (function_definition
-            name: (identifier) @name) ) @cell
+            (decorator (call function: (attribute
+                object: (identifier) @obj (#eq? @obj "app")
+                attribute: (identifier) @attr (#eq? @attr "cell"))))
+        ) @cell
+
+        (with_statement
+            (with_clause (with_item value: (attribute
+                object: (identifier) @obj (#eq? @obj "app")
+                attribute: (identifier) @attr (#eq? @attr "setup"))))
+        ) @cell
     ]])
 
     local cells = {}
