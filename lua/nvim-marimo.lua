@@ -398,10 +398,12 @@ async with cm.get_context() as ctx:
     ctx.edit_cell(ctx.cells[%d].id, ctx.cells[%d].code)
 ]], idx, idx)
         kernel_execute(state, bufnr, code, nil, function()
-            vim.cmd("checktime")
-            if callback then
-                callback()
-            end
+            vim.schedule(function()
+                vim.cmd("checktime")
+                if callback then
+                    callback()
+                end
+            end)
         end)
     end)
 end
