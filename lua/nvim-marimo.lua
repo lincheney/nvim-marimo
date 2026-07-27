@@ -37,15 +37,9 @@ local function get_free_port()
     return port
 end
 
-local function get_cells_ts(bufnr)
-    local ok, parser = pcall(vim.treesitter.get_parser, bufnr, "python")
-    if not ok then
-        return
-    end
+local function get_cells_query_python(bufnr, parser)
     local tree = parser:parse()[1]
-    local root = tree:root()
-
-    local query = vim.treesitter.query.parse("python", [[
+    return tree, vim.treesitter.query.parse("python", [[
         (decorated_definition
             (decorator (attribute
                 object: (identifier) @obj (#eq? @obj "app")
@@ -64,11 +58,36 @@ local function get_cells_ts(bufnr)
                 attribute: (identifier) @attr (#eq? @attr "setup"))))
         ) @cell
     ]])
+end
+
+local function get_cells_query_markdown(bufnr, parser)
+    local tree = parser:parse()[1]
+    return tree, vim.treesitter.query.parse("markdown", [[
+        (fenced_code_block
+            (info_string) @lang (#lua-match? @lang "^python {.marimo[ }]")
+        ) @cell
+    ]])
+end
+
+local function get_cells_ts(bufnr)
+    local ok, parser = pcall(vim.treesitter.get_parser, bufnr)
+    local query
+    local tree
+    if ok and parser:lang() == 'python' then
+        tree, query = get_cells_query_python(bufnr, parser)
+    elseif ok and parser:lang() == 'markdown' then
+        tree, query = get_cells_query_markdown(bufnr, parser)
+    else
+        return
+    end
 
     local cells = {}
-    for id, node, _ in query:iter_captures(root, bufnr) do
+    for id, node, _ in query:iter_captures(tree:root(), bufnr) do
         if query.captures[id] == "cell" then
-            local start_row, _, end_row, _ = node:range()
+            local start_row, _, end_row, end_col = node:range()
+            if end_col == 0 then
+                end_row = math.max(start_row, end_row - 1)
+            end
             table.insert(cells, {start_row = start_row, end_row = end_row})
         end
     end
