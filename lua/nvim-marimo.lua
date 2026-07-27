@@ -1,7 +1,6 @@
 -- luacheck: globals vim
 local M = {}
 
-local MARIMO_SOCKET = vim.env.MARIMO_SOCKET
 local NAMESPACE = vim.api.nvim_create_namespace("nvim-marimo")
 
 -- Buffer-local states
@@ -15,6 +14,14 @@ local function urlencode(str)
     return string.gsub(str, "([^%w%-%_%.])", function(c)
         return string.format("%%%02X", string.byte(c))
     end)
+end
+
+local function get_free_port()
+    local tcp = vim.uv.new_tcp()
+    tcp:bind('127.0.0.1', 0)
+    local port = tcp:getsockname().port
+    tcp:close()
+    return port
 end
 
 local function get_render_backend()
@@ -68,6 +75,9 @@ local function get_state(bufnr)
 
     if not buffer_states[bufnr] then
         buffer_states[bufnr] = {
+            url = nil,
+            curl_args = {},
+            server_process = nil,
             session_id = nil,
             cell_data = nil,
             output_buf = nil,
@@ -80,8 +90,19 @@ local function get_state(bufnr)
     return buffer_states[bufnr]
 end
 
-local function check_session_exists(sid, file_path, callback)
-    vim.system({"curl", "--unix-socket", MARIMO_SOCKET, "-s", "--fail-with-body", "http://host/api/sessions"}, function(out)
+local function curl(state, path, args, options, done_callback)
+    local url = state.url:gsub('/+$', '') .. path
+    if options and options.websocket then
+        url = url:gsub('^http://', 'ws://'):gsub('^https://', 'wss://')
+        options.websocket = nil
+    end
+    local cmd = vim.list_extend({"curl", "-s", "--fail-with-body", url}, state.curl_args or {})
+    cmd = vim.list_extend(cmd, args or {})
+    return vim.system(cmd, options, done_callback)
+end
+
+local function check_session_exists(state, sid, file_path, callback)
+    curl(state, "/api/sessions", {}, {}, function(out)
         if out.code ~= 0 then
             return callback(false)
         end
@@ -90,12 +111,7 @@ local function check_session_exists(sid, file_path, callback)
     end)
 end
 
-local function get_session_id(bufnr, callback)
-    local state = get_state(bufnr)
-    if not state then
-        callback()
-        return
-    end
+local function get_session_id(state, bufnr, callback)
     if state.session_id then
         callback(state.session_id)
         return
@@ -107,7 +123,7 @@ local function get_session_id(bufnr, callback)
         return
     end
 
-    vim.system({"curl", "--unix-socket", MARIMO_SOCKET, "-s", "--fail", "http://host/api/sessions"}, function(out)
+    curl(state, "/api/sessions", {}, {}, function(out)
         if out.code == 0 then
             local ok, sessions = pcall(vim.json.decode, out.stdout)
             if ok and sessions then
@@ -122,11 +138,8 @@ local function get_session_id(bufnr, callback)
         end
 
         local session_id = "s_" .. math.random()
-        vim.system({
-            "curl", "--unix-socket", MARIMO_SOCKET, "-s", "--fail", "-m0.5",
-            "ws://host/ws?file=" .. urlencode(file_path) .. "&session_id=" .. urlencode(session_id)
-        }, function(_)
-            check_session_exists(session_id, file_path, function(exists)
+        curl(state, "/ws?file=" .. urlencode(file_path) .. "&session_id=" .. urlencode(session_id), {"-m0.5"}, {websocket = true}, function(_)
+            check_session_exists(state, session_id, file_path, function(exists)
                 if exists then
                     state.session_id = session_id
                 else
@@ -153,15 +166,15 @@ local function get_current_cell_index(bufnr)
     end
 end
 
-local function kernel_execute(bufnr, code, out_callback, done_callback)
-    get_session_id(bufnr, function(sid)
+local function kernel_execute(state, bufnr, code, out_callback, done_callback)
+    get_session_id(state, bufnr, function(sid)
         if not sid then
             return
         end
 
         local payload = vim.json.encode({code = code})
-        vim.system({
-            "curl", "--unix-socket", MARIMO_SOCKET, "-s", "--fail", "-N", "http://host/api/kernel/execute",
+        curl(state, "/api/kernel/execute", {
+            "-N",
             "-H", "Content-Type: application/json",
             "-H", "Marimo-Session-Id: " .. sid,
             "-d", payload
@@ -236,7 +249,7 @@ async with cm.get_context() as ctx:
     print(json.dumps(res))
 ]]
     local cell_data = nil
-    kernel_execute(bufnr, code, function(data, type)
+    kernel_execute(state, bufnr, code, function(data, type)
         if type == 'stdout' then
             local ok, cd = pcall(vim.json.decode, data.data)
             if ok then
@@ -304,7 +317,7 @@ async with cm.get_context() as ctx:
 ]], idx, idx)
 
     local to_run = {}
-    kernel_execute(bufnr, code, function(data, type)
+    kernel_execute(state, bufnr, code, function(data, type)
         if type == 'stdout' then
             local ok, jsondata = pcall(vim.json.decode, data.data)
             if ok then
@@ -353,6 +366,7 @@ print(%q + cell_lookup[id].status)
                     state.cell_data[to_run[i][3] + 1] = {status = 'running', console_outputs = {}}
                     render(bufnr)
                     kernel_execute(
+                        state,
                         bufnr,
                         string.format(code_template, to_run[i][1], marker),
                         function(...) line_callback(to_run[i][3] + 1, ...) end,
@@ -367,11 +381,15 @@ print(%q + cell_lookup[id].status)
 end
 
 function M.reformat(bufnr, callback)
+    local state = get_state(bufnr)
+    if not state then
+        return
+    end
     local idx = get_current_cell_index(bufnr)
     if not idx then
         return
     end
-    get_session_id(bufnr, function(sid)
+    get_session_id(state, bufnr, function(sid)
         if not sid then
             if callback then
                 callback()
@@ -383,7 +401,7 @@ import marimo._code_mode as cm
 async with cm.get_context() as ctx:
     ctx.edit_cell(ctx.cells[%d].id, ctx.cells[%d].code)
 ]], idx, idx)
-        kernel_execute(bufnr, code, nil, function()
+        kernel_execute(state, bufnr, code, nil, function()
             vim.cmd("checktime")
             if callback then
                 callback()
@@ -441,10 +459,44 @@ function M.open_float(bufnr)
     })
 end
 
-function M.enable(bufnr)
+local function start_server_sync(state)
+    local port = get_free_port()
+    print('Starting marimo server on port ' .. port)
+    state.server_process = vim.system({
+        'marimo',
+        'edit',
+        '--watch',
+        '--headless',
+        '--no-token',
+        '--no-skew-protection',
+        '--skip-update-check',
+        '--host', '127.0.0.1',
+        '--port', port,
+    })
+    state.url = 'http://127.0.0.1:' .. port .. '/'
+    -- try 5 times
+    for _ = 1, 5 do
+        if curl(state, '/api/status'):wait().code == 0 then
+            return true
+        end
+        vim.cmd[[sleep 1]]
+    end
+end
+
+function M.enable(bufnr, opts)
+    opts = opts or {}
+
     bufnr = bufnr or vim.api.nvim_get_current_buf()
     local state = get_state(bufnr)
     if not state then
+        return
+    end
+
+    state.url = opts.url
+    state.curl_args = opts.curl_args
+    if not state.url and not start_server_sync(state) then
+        error('Failed to start marimo server')
+        M.disable(bufnr)
         return
     end
 
@@ -506,7 +558,13 @@ end
 function M.disable(bufnr)
     local state = buffer_states[bufnr]
     if state then
-        vim.api.nvim_del_augroup_by_id(state.augroup)
+        if state.augroup then
+            vim.api.nvim_del_augroup_by_id(state.augroup)
+        end
+        if state.server_process then
+            state.server_process:kill('term')
+            state.server_process = nil
+        end
         get_render_backend().disable(bufnr, state)
         buffer_states[bufnr] = nil
     end
