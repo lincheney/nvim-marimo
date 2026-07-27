@@ -485,10 +485,10 @@ function M.open_float(bufnr)
 
     vim.api.nvim_open_win(floatbuf, true, {
         relative = 'editor',
-        width = math.ceil(vim.o.columns / 2),
-        height = math.ceil(vim.o.lines / 2),
-        col = math.ceil(vim.o.columns / 4),
-        row = math.ceil(vim.o.lines / 4),
+        width = math.ceil(vim.o.columns * 2 / 3),
+        height = math.ceil(vim.o.lines * 2 / 3),
+        col = math.floor(vim.o.columns / 6),
+        row = math.floor(vim.o.lines / 6),
         border = 'rounded',
         title = ' ' .. status .. ' ',
     })
