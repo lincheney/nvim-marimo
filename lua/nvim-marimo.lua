@@ -96,6 +96,7 @@ local function get_state(bufnr)
             scrolling = false,
             out_offsets = {},
             get_cells_ts = get_cells_ts,
+            running = nil,
         }
     end
     return buffer_states[bufnr]
@@ -178,13 +179,20 @@ local function get_current_cell_index(bufnr)
 end
 
 local function kernel_execute(state, bufnr, code, out_callback, done_callback)
+    local result = {}
     get_session_id(state, bufnr, function(sid)
         if not sid then
+            done_callback()
+            return
+        end
+
+        if result.cancel then
+            done_callback()
             return
         end
 
         local payload = vim.json.encode({code = code})
-        curl(state, "/api/kernel/execute", {
+        result.inner = curl(state, "/api/kernel/execute", {
             "-N",
             "-H", "Content-Type: application/json",
             "-H", "Marimo-Session-Id: " .. sid,
@@ -230,6 +238,7 @@ local function kernel_execute(state, bufnr, code, out_callback, done_callback)
             end
         }, done_callback)
     end)
+    return result
 end
 
 local function render(bufnr)
@@ -255,7 +264,7 @@ import re
 def clean(val):
     if val.get('data'):
         if val['channel'] == 'marimo-error' and isinstance(val['data'], list):
-            val['data'] = ' '.join(x['msg'] for x in val['data'])
+            val['data'] = ' '.join(x.get('msg', '') for x in val['data'])
         elif val['mimetype'] == "text/html" or (val['mimetype'] != 'text/plain' and val['data'].startswith('<')):
             val['data'] = html.unescape(re.sub('<[^>]+>', '', val['data']))
     return val
@@ -313,6 +322,11 @@ end
 function M.run(bufnr, callback)
     local state = get_state(bufnr)
     if not state then
+        return
+    end
+
+    if state.running then
+        print_error('Another cell is executing')
         return
     end
 
@@ -402,17 +416,21 @@ print(%q + cell_lookup[id].status)
         function done_callback(i)
             vim.schedule(function()
                 if failed or i > #to_run then
+                    state.running = nil
                     M.refresh(bufnr, callback)
                 else
                     print("Executing " .. to_run[i][2])
                     state.cell_data[to_run[i][3] + 1] = {status = 'running', console_outputs = {}}
                     render(bufnr)
-                    kernel_execute(
+                    state.running = kernel_execute(
                         state,
                         bufnr,
                         string.format(code_template, to_run[i][1], marker),
                         function(...) line_callback(to_run[i][3] + 1, ...) end,
-                        function() done_callback(i + 1) end
+                        function(result)
+                            failed = failed or not result
+                            done_callback(i + 1)
+                        end
                     )
                 end
             end)
@@ -420,6 +438,20 @@ print(%q + cell_lookup[id].status)
         done_callback(1)
     end)
 
+end
+
+function M.interrupt(bufnr)
+    local state = get_state(bufnr)
+    if not state then
+        return
+    end
+
+    if state.running then
+        state.running.cancel = true
+        if state.running.inner then
+            state.running.inner:kill()
+        end
+    end
 end
 
 function M.reformat(bufnr, callback)
@@ -559,6 +591,9 @@ function M.enable(bufnr, opts)
     end, {})
     vim.api.nvim_buf_create_user_command(bufnr, "MarimoRun", function()
         M.run(bufnr)
+    end, {})
+    vim.api.nvim_buf_create_user_command(bufnr, "MarimoInterrupt", function()
+        M.interrupt(bufnr)
     end, {})
     vim.api.nvim_buf_create_user_command(bufnr, "MarimoReformat", function()
         M.reformat(bufnr)
