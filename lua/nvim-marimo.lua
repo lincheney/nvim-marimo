@@ -24,11 +24,6 @@ local function get_free_port()
     return port
 end
 
-local function get_render_backend()
-    return require('nvim-marimo.virt_lines')
-    -- return require('nvim-marimo.split')
-end
-
 local function get_cells_ts(bufnr)
     local ok, parser = pcall(vim.treesitter.get_parser, bufnr, "python")
     if not ok then
@@ -78,6 +73,7 @@ local function get_state(bufnr)
             url = nil,
             curl_args = {},
             server_process = nil,
+            render_backend = nil,
             session_id = nil,
             cell_data = nil,
             output_buf = nil,
@@ -224,7 +220,7 @@ end
 local function render(bufnr)
     local state = get_state(bufnr)
     if state then
-        get_render_backend().render(bufnr, state)
+        state.render_backend.render(bufnr, state)
     end
 end
 
@@ -486,12 +482,22 @@ end
 function M.enable(bufnr, opts)
     opts = opts or {}
 
+    local render_backend
+    if opts.render_style == 'virt_lines' or opts.render_style == nil then
+        render_backend = require('nvim-marimo.virt_lines')
+    elseif opts.render_style == 'split' then
+        render_backend = require('nvim-marimo.split')
+    else
+        error(string.format('Unknown .render_style (%q), expected virt_lines, split', opts.render_style))
+    end
+
     bufnr = bufnr or vim.api.nvim_get_current_buf()
     local state = get_state(bufnr)
     if not state then
         return
     end
 
+    state.render_backend = render_backend
     state.url = opts.url
     state.curl_args = opts.curl_args
     if not state.url and not start_server_sync(state) then
@@ -547,7 +553,7 @@ function M.enable(bufnr, opts)
         cell_data[i] = {status = 'loading'}
     end
     state.cell_data = cell_data
-    get_render_backend().enable(bufnr, state)
+    state.render_backend.enable(bufnr, state)
     render(bufnr)
 
     M.refresh(bufnr, function()
@@ -565,7 +571,7 @@ function M.disable(bufnr)
             state.server_process:kill('term')
             state.server_process = nil
         end
-        get_render_backend().disable(bufnr, state)
+        state.render_backend.disable(bufnr, state)
         buffer_states[bufnr] = nil
     end
 end
