@@ -342,7 +342,7 @@ async with cm.get_context() as ctx:
                         table.insert(outputs, cell.output)
                     end
                     for _, e in ipairs(cell.errors) do
-                        if not (last_out and last_out:gsub('\n$', ''):sub(-#e) ~= e) then
+                        if not (last_out and last_out:gsub('\n$', ''):sub(-#e) == e) then
                             table.insert(outputs, {channel = "marimo-error", data = e})
                         end
                     end
