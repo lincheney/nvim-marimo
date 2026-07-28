@@ -125,6 +125,8 @@ local function curl(state, path, args, options, done_callback)
     local url = state.url:gsub('/+$', '') .. path
     if options and options.websocket then
         url = url:gsub('^http://', 'ws://'):gsub('^https://', 'wss://')
+        table.insert(state.curl_args, 1, 'ws')
+        table.insert(state.curl_args, 1, '--proto-default')
         options.websocket = nil
     end
     local cmd = vim.list_extend({"curl", "-s", "--fail-with-body", url}, state.curl_args or {})
