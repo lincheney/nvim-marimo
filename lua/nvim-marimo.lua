@@ -137,7 +137,7 @@ end
 
 local function check_session_exists(state, sid, file_path, callback)
     curl(state, "/api/sessions", {}, {}, function(out)
-        if out.code ~= 0 then
+        if out.code ~= 0 and out.signal ~= 0 then
             return callback(false)
         end
         local ok, sessions = pcall(vim.json.decode, out.stdout)
@@ -158,7 +158,7 @@ local function get_session_id(state, bufnr, callback)
     end
 
     curl(state, "/api/sessions", {}, {}, function(out)
-        if out.code == 0 then
+        if out.code == 0 and out.signal == 0 then
             local ok, sessions = pcall(vim.json.decode, out.stdout)
             if ok and sessions then
                 for id, info in pairs(sessions) do
@@ -436,13 +436,10 @@ print(%q + cell_lookup[id].status)
 ]]
         local failed = false
         local function line_callback(i, data, type)
-            if type == 'done' then
-                failed = data.success
-                return
-            end
-
             if data.data:find(marker, 1, true) == 1 then
-                state.cell_data[i].status = data.data:sub(#marker + 1):gsub('\n', '')
+                local status = data.data:sub(#marker + 1):gsub('\n', '')
+                state.cell_data[i].status = status
+                failed = (status ~= 'idle')
             else
                 local cleaned = clean_output(data)
                 if cleaned then
@@ -457,6 +454,11 @@ print(%q + cell_lookup[id].status)
         function done_callback(i)
             vim.schedule(function()
                 if failed or i > #to_run then
+                    if failed then
+                        print_error("Execution failed")
+                    else
+                        print("Execution succeeded")
+                    end
                     state.running = nil
                     M.refresh(bufnr, callback)
                 else
@@ -469,7 +471,7 @@ print(%q + cell_lookup[id].status)
                         string.format(code_template, to_run[i][1], marker),
                         function(...) line_callback(to_run[i][3] + 1, ...) end,
                         function(result)
-                            failed = failed or not result
+                            failed = failed or result.code ~= 0 or result.signal ~= 0
                             done_callback(i + 1)
                         end
                     )
@@ -592,7 +594,8 @@ local function start_server_sync(state)
     state.url = 'http://127.0.0.1:' .. port .. '/'
     -- try 5 times
     for _ = 1, 5 do
-        if curl(state, '/api/status'):wait().code == 0 then
+        local result = curl(state, '/api/status'):wait()
+        if result.code == 0 and result.signal == 0 then
             return true
         end
         vim.cmd[[sleep 1]]
