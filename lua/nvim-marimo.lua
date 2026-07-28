@@ -172,19 +172,35 @@ local function get_session_id(state, bufnr, callback)
         end
 
         local session_id = "s_" .. math.random()
-        curl(state, "/ws?file=" .. urlencode(file_path) .. "&session_id=" .. urlencode(session_id), {"-m0.5"}, {websocket = true}, function(_)
-            check_session_exists(state, session_id, file_path, function(exists)
-                if exists then
-                    state.session_id = session_id
-                else
-                    vim.schedule(function()
-                        print_error('failed to start marimo session for ' .. file_path)
-                    end)
+        curl(
+            state,
+            "/ws?file=" .. urlencode(file_path) .. "&session_id=" .. urlencode(session_id),
+            {'--no-buffer'},
+            {
+                websocket = true,
+                stdout = function(_, data)
+                    if callback then
+                        local cb = callback
+                        callback = nil
+                        check_session_exists(state, session_id, file_path, function(exists)
+                            if exists then
+                                state.session_id = session_id
+                            else
+                                vim.schedule(function()
+                                    print_error('failed to start marimo session for ' .. file_path)
+                                end)
+                            end
+                            cb(state.session_id)
+                        end)
+                    end
+                end,
+            },
+            function(_)
+                if callback then
+                    callback()
                 end
-                callback(state.session_id)
-            end)
-
-        end)
+            end
+        )
     end)
 
 end
