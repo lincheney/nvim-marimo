@@ -125,6 +125,7 @@ local function curl(state, path, args, options, done_callback)
     local url = state.url:gsub('/+$', '') .. path
     if options and options.websocket then
         url = url:gsub('^http://', 'ws://'):gsub('^https://', 'wss://')
+        state.curl_args = state.curl_args or {}
         table.insert(state.curl_args, 1, 'ws')
         table.insert(state.curl_args, 1, '--proto-default')
         options.websocket = nil
