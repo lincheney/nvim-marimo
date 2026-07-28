@@ -43,19 +43,25 @@ local function get_cells_query_python(bufnr, parser)
         (decorated_definition
             (decorator (attribute
                 object: (identifier) @obj (#eq? @obj "app")
-                attribute: (identifier) @attr (#eq? @attr "cell")))
+                attribute: (identifier) @attr (#any-of? @attr "cell" "function" "class_definition")))
         ) @cell
 
         (decorated_definition
             (decorator (call function: (attribute
                 object: (identifier) @obj (#eq? @obj "app")
-                attribute: (identifier) @attr (#eq? @attr "cell"))))
+                attribute: (identifier) @attr (#any-of? @attr "cell" "function" "class_definition"))))
         ) @cell
 
         (with_statement
             (with_clause (with_item value: (attribute
                 object: (identifier) @obj (#eq? @obj "app")
                 attribute: (identifier) @attr (#eq? @attr "setup"))))
+        ) @cell
+
+        (expression_statement
+            (call function: (attribute
+                object: (identifier) @obj (#eq? @obj "app")
+                attribute: (identifier) @attr (#any-of? @attr "_unparsable_cell")))
         ) @cell
     ]])
 end
