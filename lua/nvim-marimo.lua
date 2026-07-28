@@ -455,7 +455,7 @@ print(%q + cell_lookup[id].status)
             vim.schedule(function()
                 if failed or i > #to_run then
                     if failed then
-                        print_error("Execution failed")
+                        print_error("Execution failed for " .. to_run[i-1][2])
                     else
                         print("Execution succeeded")
                     end
