@@ -626,8 +626,10 @@ function M.enable(bufnr, opts)
         render_backend = require('nvim-marimo.virt_lines')
     elseif opts.render_style == 'split' then
         render_backend = require('nvim-marimo.split')
+    elseif opts.render_style == 'nothing' then
+        render_backend = require('nvim-marimo.nothing')
     else
-        error(string.format('Unknown .render_style (%q), expected virt_lines, split', opts.render_style))
+        error(string.format('Unknown .render_style (%q), expected virt_lines, split, nothing', opts.render_style))
     end
 
     bufnr = bufnr or vim.api.nvim_get_current_buf()
