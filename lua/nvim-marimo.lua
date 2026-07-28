@@ -306,17 +306,26 @@ async with cm.get_context() as ctx:
             local ok, cd = pcall(vim.json.decode, data.data, {luanil = {object = true}})
             if ok then
                 for _, cell in ipairs(cd) do
+                    local last_out = cell.console_outputs[#cell.console_outputs]
+                    last_out = last_out and last_out.channel == 'stderr' and last_out.data
+
                     local outputs = {}
                     for _, o in ipairs(cell.console_outputs) do
                         if o.data then
                             table.insert(outputs, o)
                         end
                     end
-                    if cell.output and (cell.output.channel ~= 'marimo-error' or #cell.errors == 0) and cell.output.data then
+                    if cell.output
+                        and (cell.output.channel ~= 'marimo-error' or #cell.errors == 0)
+                        and cell.output.data
+                        and not (last_out and last_out:gsub('\n$', ''):sub(-#cell.output.data) == cell.output.data)
+                    then
                         table.insert(outputs, cell.output)
                     end
                     for _, e in ipairs(cell.errors) do
-                        table.insert(outputs, {channel = "marimo-error", data = e})
+                        if not (last_out and last_out:gsub('\n$', ''):sub(-#e) ~= e) then
+                            table.insert(outputs, {channel = "marimo-error", data = e})
+                        end
                     end
                     cell.console_outputs = outputs
                 end
