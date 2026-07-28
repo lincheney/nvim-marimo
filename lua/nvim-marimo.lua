@@ -350,6 +350,23 @@ async with cm.get_context() as ctx:
 end
 
 function M.run(bufnr, callback)
+    local idx = get_current_cell_index(bufnr)
+    if not idx then
+        if callback then
+            callback()
+        end
+        return
+    end
+    local code = --[[python--]] [[collect(ctx.cells[%d], %d)]]
+    M._run_internal(bufnr, code:format(idx, idx), callback)
+end
+
+function M.run_all_stale(bufnr, callback)
+    local code = --[[python--]] [[[collect(cell, i) for i, cell in enumerate(ctx.cells) if cell.status == "stale"] ]]
+    M._run_internal(bufnr, code, callback)
+end
+
+function M._run_internal(bufnr, collect_logic, callback)
     local state = get_state(bufnr)
     if not state then
         return
@@ -360,21 +377,12 @@ function M.run(bufnr, callback)
         return
     end
 
-    local idx = get_current_cell_index(bufnr)
-    if not idx then
-        if callback then
-            callback()
-        end
-        return
-    end
-
     local code = string.format(--[[python--]] [[
 import marimo._code_mode as cm
 from marimo._runtime.commands import ExecuteCellCommand
 import json
 
 async with cm.get_context() as ctx:
-    i = %d
     to_run = []
     visited = set()
     # Map for easy lookup of cell objects by ID
@@ -390,14 +398,16 @@ async with cm.get_context() as ctx:
         parents = ctx.graph.parents.get(cell.id, ())
         for pid in parents:
             # Check staleness via ctx.cells status
-            i, p_cell = cell_lookup.get(pid)
-            if p_cell and p_cell.status == "stale":
-                collect(p_cell, i)
+            res = cell_lookup.get(pid)
+            if res:
+                p_idx, p_cell = res
+                if p_cell.status == "stale":
+                    collect(p_cell, p_idx)
         if cell.id not in to_run:
             to_run.append([cell.id, cell.name, idx])
-    collect(ctx.cells[i], i)
+    %s
     print(json.dumps(to_run))
-]], idx, idx)
+]], collect_logic)
 
     local to_run = {}
     kernel_execute(state, bufnr, code, function(data, type)
@@ -467,7 +477,6 @@ print(%q + cell_lookup[id].status)
         end
         done_callback(1)
     end)
-
 end
 
 function M.interrupt(bufnr)
@@ -621,6 +630,9 @@ function M.enable(bufnr, opts)
     end, {})
     vim.api.nvim_buf_create_user_command(bufnr, "MarimoRun", function()
         M.run(bufnr)
+    end, {})
+    vim.api.nvim_buf_create_user_command(bufnr, "MarimoRunAllStale", function()
+        M.run_all_stale(bufnr)
     end, {})
     vim.api.nvim_buf_create_user_command(bufnr, "MarimoInterrupt", function()
         M.interrupt(bufnr)
