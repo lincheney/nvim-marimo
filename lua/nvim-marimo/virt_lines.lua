@@ -41,8 +41,8 @@ function M.render(bufnr, state)
             end
         end
         if #virt_lines > 1 then
-            if #virt_lines > MAX_LINES + 1 then
-                local overflow = #virt_lines - MAX_LINES - 1 - 1
+            if #virt_lines > MAX_LINES then
+                local overflow = #virt_lines - MAX_LINES
                 virt_lines[2] = {{'... ' .. overflow .. ' more lines', 'MarimoFolded'}}
                 for _ = 1, overflow - 1 do
                     table.remove(virt_lines, 3)
