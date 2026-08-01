@@ -4,8 +4,8 @@ local NAMESPACE = vim.api.nvim_create_namespace("nvim-marimo.split")
 local SEP = string.rep('─', 9999)
 
 local function setup_output_buffer(bufnr, state)
-    if state.output_buf and vim.api.nvim_buf_is_valid(state.output_buf) then
-        return state.output_buf
+    if state.split_output_buf and vim.api.nvim_buf_is_valid(state.split_output_buf) then
+        return state.split_output_buf
     end
 
     local output_buf = vim.api.nvim_create_buf(false, true)
@@ -13,7 +13,7 @@ local function setup_output_buffer(bufnr, state)
     vim.api.nvim_buf_set_option(output_buf, "buftype", "nofile")
     vim.api.nvim_buf_set_option(output_buf, "swapfile", false)
     vim.api.nvim_buf_set_option(output_buf, "bufhidden", "hide")
-    state.output_buf = output_buf
+    state.split_output_buf = output_buf
     return output_buf
 end
 
@@ -47,7 +47,7 @@ local function measure_screen_height(window, start_row, end_row)
 end
 
 local function sync_scroll(bufnr, state)
-    if state.scrolling > 0 then
+    if state.split_scrolling > 0 then
         return
     end
     local cells = state.get_cells_ts(bufnr)
@@ -55,8 +55,8 @@ local function sync_scroll(bufnr, state)
         return
     end
 
-    local main_win = state.main_win
-    local output_win = state.output_win
+    local main_win = state.split_main_win
+    local output_win = state.split_output_win
     if not main_win or not output_win or not vim.api.nvim_win_is_valid(main_win) or not vim.api.nvim_win_is_valid(output_win) then
         return
     end
@@ -64,15 +64,15 @@ local function sync_scroll(bufnr, state)
     if active_win ~= main_win and active_win ~= output_win then
         return
     end
-    if vim.api.nvim_win_get_buf(main_win) ~= bufnr or vim.api.nvim_win_get_buf(output_win) ~= state.output_buf then
+    if vim.api.nvim_win_get_buf(main_win) ~= bufnr or vim.api.nvim_win_get_buf(output_win) ~= state.split_output_buf then
         return
     end
 
-    state.scrolling = state.scrolling + 1
+    state.split_scrolling = state.split_scrolling + 1
     local wininfo = vim.fn.getwininfo(active_win)[1]
 
-    local active = (active_win == main_win) and cells or state.out_offsets
-    local inactive = (active_win ~= main_win) and cells or state.out_offsets
+    local active = (active_win == main_win) and cells or state.split_out_offsets
+    local inactive = (active_win ~= main_win) and cells or state.split_out_offsets
 
     for i, c in ipairs(active) do
         if wininfo.topline <= c.start_row + 1 or i == #cells then
@@ -120,7 +120,7 @@ local function sync_scroll(bufnr, state)
         end
     end
 
-    state.scrolling = state.scrolling - 1
+    state.split_scrolling = state.split_scrolling - 1
 end
 
 function M.render(bufnr, state)
@@ -139,13 +139,13 @@ function M.render(bufnr, state)
     local out_offsets = {}
     local line_offset = 0
     local numlines = 0
-    local view = vim.api.nvim_win_call(state.main_win, vim.fn.winsaveview)
+    local view = vim.api.nvim_win_call(state.split_main_win, vim.fn.winsaveview)
 
     vim.api.nvim_buf_clear_namespace(bufnr, NAMESPACE, 0, -1)
     vim.api.nvim_buf_clear_namespace(output_buf, NAMESPACE, 0, -1)
     vim.api.nvim_buf_set_lines(output_buf, 0, -1, false, {})
 
-    state.scrolling = state.scrolling + 1
+    state.split_scrolling = state.split_scrolling + 1
 
     for i, cell_info in ipairs(cells) do
 
@@ -161,7 +161,7 @@ function M.render(bufnr, state)
         local data = state.cell_data[i] or {status = "unknown"}
         local nextnonblank = vim.fn.nextnonblank(cell_info.end_row + 2)
         local cell_height = nextnonblank - cell_info.start_row - 1
-        local cell_screen_height = measure_screen_height(state.main_win, cell_info.start_row + 1, nextnonblank - 1)
+        local cell_screen_height = measure_screen_height(state.split_main_win, cell_info.start_row + 1, nextnonblank - 1)
 
         lines = {}
         local status = data.status
@@ -192,7 +192,7 @@ function M.render(bufnr, state)
         })
         vim.api.nvim_buf_set_lines(output_buf, -1, -1, false, lines)
         local output_height = measure_screen_height(
-            state.output_win,
+            state.split_output_win,
             vim.api.nvim_buf_line_count(output_buf) - #lines + 1,
             vim.api.nvim_buf_line_count(output_buf)
         )
@@ -213,42 +213,44 @@ function M.render(bufnr, state)
         numlines = numlines + #lines
 
     end
-    state.out_offsets = out_offsets
+    state.split_out_offsets = out_offsets
     vim.api.nvim_buf_set_lines(output_buf, 0, 1, false, {})
     for _, extmark in ipairs(extmarks) do
         vim.api.nvim_buf_set_extmark(unpack(extmark))
     end
-    vim.api.nvim_win_call(state.main_win, function()
+    vim.api.nvim_win_call(state.split_main_win, function()
         vim.fn.winrestview(view)
     end)
 
-    state.scrolling = state.scrolling - 1
+    state.split_scrolling = state.split_scrolling - 1
     sync_scroll(bufnr, state)
 end
 
 function M.enable(bufnr, state)
-    state.main_win = vim.api.nvim_get_current_win()
+    state.split_main_win = vim.api.nvim_get_current_win()
     local output_buf = setup_output_buffer(bufnr, state)
     local output_win = vim.api.nvim_open_win(output_buf, false, {split = 'right'})
     vim.api.nvim_win_set_option(output_win, "scrolloff", 0)
     vim.api.nvim_win_set_option(output_win, "smoothscroll", true)
-    state.output_win = output_win
-    state.scrolling = 0
+    state.split_output_win = output_win
+    state.split_scrolling = 0
 
-    vim.api.nvim_create_autocmd("WinScrolled", {group = state.augroup, callback = function()
+    state.split_augroup = vim.api.nvim_create_augroup('nvim-marimo.split.'..bufnr, {clear = true})
+
+    vim.api.nvim_create_autocmd("WinScrolled", {group = state.split_augroup, callback = function()
         for win, _ in pairs(vim.v.event) do
             win = tonumber(win)
             local buf = win and vim.api.nvim_win_get_buf(win)
-            if (buf == output_buf or buf == bufnr) and (win == state.main_win or win == output_win) then
+            if (buf == output_buf or buf == bufnr) and (win == state.split_main_win or win == output_win) then
                 sync_scroll(bufnr, state)
                 break
             end
         end
     end})
-    vim.api.nvim_create_autocmd("WinResized", {group = state.augroup, callback = function()
+    vim.api.nvim_create_autocmd("WinResized", {group = state.split_augroup, callback = function()
         for _, win in ipairs(vim.v.event.windows) do
             local buf = vim.api.nvim_win_get_buf(win)
-            if (buf == output_buf or buf == bufnr) and (win == state.main_win or win == output_win) then
+            if (buf == output_buf or buf == bufnr) and (win == state.split_main_win or win == output_win) then
                 M.render(bufnr, state)
                 break
             end
@@ -257,12 +259,13 @@ function M.enable(bufnr, state)
 end
 
 function M.disable(bufnr, state)
+    vim.api.nvim_del_augroup_by_id(state.split_augroup)
     vim.api.nvim_buf_clear_namespace(bufnr, NAMESPACE, 0, -1)
-    if state.output_win then
-        vim.api.nvim_win_close(state.output_win, true)
+    if state.split_output_win then
+        vim.api.nvim_win_close(state.split_output_win, true)
     end
-    if state.output_buf then
-        vim.api.nvim_buf_delete(state.output_buf, {force = true})
+    if state.split_output_buf then
+        vim.api.nvim_buf_delete(state.split_output_buf, {force = true})
     end
 end
 
