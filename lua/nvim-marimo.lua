@@ -3,6 +3,11 @@ local M = {}
 
 local NAMESPACE = vim.api.nvim_create_namespace("nvim-marimo")
 
+local IS_ONLY_MARKDOWN = --[[python--]] [[
+def is_only_markdown(cell, ft):
+    return ft.startswith('markdown') and (cell.code == "\n" or (cell.code.startswith('mo.md(r"""\n') and cell.code.rstrip('\n').endswith('\n""")')))
+]]
+
 -- Buffer-local states
 local buffer_states = {}
 
@@ -299,7 +304,7 @@ function M.refresh(bufnr, callback)
         return
     end
 
-    local code = --[[python--]] [[
+    local code = IS_ONLY_MARKDOWN .. string.format(--[[python--]] [[
 import marimo._code_mode as cm
 import json
 import html
@@ -317,14 +322,15 @@ async with cm.get_context() as ctx:
     res = []
     # Build a lookup for cell status directly from ctx.cells
     for c in ctx.cells:
-        res.append({
-            "status": c.status,
-            "output": clean(c.output.asdict()) if c.output else None,
-            "console_outputs": [clean(o.asdict()) for o in c.console_outputs],
-            "errors": [o.msg for o in c.errors],
-        })
+        if not is_only_markdown(c, %q):
+            res.append({
+                "status": c.status,
+                "output": clean(c.output.asdict()) if c.output else None,
+                "console_outputs": [clean(o.asdict()) for o in c.console_outputs],
+                "errors": [o.msg for o in c.errors],
+            })
     print(json.dumps(res))
-]]
+]], vim.bo[bufnr].filetype)
     local cell_data = nil
     kernel_execute(state, bufnr, code, function(data, type)
         if type == 'stdout' then
@@ -380,8 +386,8 @@ function M.run(bufnr, callback)
         end
         return
     end
-    local code = --[[python--]] [[collect(ctx.cells[%d], %d)]]
-    M._run_internal(bufnr, code:format(idx, idx), callback)
+    local code = --[[python--]] [[next(collect(cell, i) for (j, (i, cell)) in enumerate((i, cell) for (i, cell) in enumerate(ctx.cells) if not is_only_markdown(cell, %q)) if j == %d)]]
+    M._run_internal(bufnr, code:format(vim.bo[bufnr].filetype, idx), callback)
 end
 
 function M.run_all_stale(bufnr, callback)
@@ -400,7 +406,7 @@ function M._run_internal(bufnr, collect_logic, callback)
         return
     end
 
-    local code = string.format(--[[python--]] [[
+    local code = IS_ONLY_MARKDOWN .. string.format(--[[python--]] [[
 import marimo._code_mode as cm
 from marimo._runtime.commands import ExecuteCellCommand
 import json
@@ -415,6 +421,8 @@ async with cm.get_context() as ctx:
     ctx._kernel.mutate_graph(cmds, ())
 
     def collect(cell, idx):
+        if is_only_markdown(cell, %q):
+            return
         if cell.id in visited:
             return
         visited.add(cell.id)
@@ -430,7 +438,7 @@ async with cm.get_context() as ctx:
             to_run.append([cell.id, cell.name, idx])
     %s
     print(json.dumps(to_run))
-]], collect_logic)
+]], vim.bo[bufnr].filetype, collect_logic)
 
     local to_run = {}
     kernel_execute(state, bufnr, code, function(data, type)
@@ -534,11 +542,13 @@ function M.reformat(bufnr, callback)
             end
             return
         end
-        local code = string.format(--[[python--]] [[
+        local code = IS_ONLY_MARKDOWN .. string.format(--[[python--]] [[
 import marimo._code_mode as cm
 async with cm.get_context() as ctx:
-    ctx.edit_cell(ctx.cells[%d].id, ctx.cells[%d].code)
-]], idx, idx)
+    cells = (cell for cell in ctx.cells if not is_only_markdown(cell, %q))
+    cell = next(cell for i, cell in enumerate(cells) if i == %d)
+    ctx.edit_cell(cell.id, cell.code)
+]], vim.bo[bufnr].filetype, idx)
         kernel_execute(state, bufnr, code, nil, function()
             vim.schedule(function()
                 vim.cmd("checktime")
