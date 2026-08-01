@@ -386,12 +386,12 @@ function M.run(bufnr, callback)
         end
         return
     end
-    local code = --[[python--]] [[next(collect(cell, i) for (j, (i, cell)) in enumerate((i, cell) for (i, cell) in enumerate(ctx.cells) if not is_only_markdown(cell, %q)) if j == %d)]]
+    local code = --[[python--]] [[next(collect(cell, j) for (j, (i, cell)) in enumerate((i, cell) for (i, cell) in enumerate(ctx.cells) if not is_only_markdown(cell, %q)) if j == %d)]]
     M._run_internal(bufnr, code:format(vim.bo[bufnr].filetype, idx), callback)
 end
 
 function M.run_all_stale(bufnr, callback)
-    local code = --[[python--]] [[[collect(cell, i) for i, cell in enumerate(ctx.cells) if cell.status == "stale"] ]]
+    local code = --[[python--]] [[[collect(cell, j) for (j, (i, cell)) in enumerate((i, cell) for (i, cell) in enumerate(ctx.cells) if not is_only_markdown(cell, %q) and cell.status == 'stale')] ]]
     M._run_internal(bufnr, code, callback)
 end
 
