@@ -21,9 +21,9 @@ function M.render(bufnr, state)
         -- vim.api.nvim_buf_set_extmark(bufnr, NAMESPACE, cell_info.start_row, 0, {virt_text = {{SEP, 'Comment'}}})
 
         local virt_lines = {}
-        local data = state.cell_data[i] or {status = "unknown"}
+        local data = state.cell_data[i] or {}
 
-        local status = data.status
+        local status = data.status or 'unknown'
         if status == 'idle' then
             status = 'success'
         end
