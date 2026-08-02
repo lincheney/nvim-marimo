@@ -29,7 +29,7 @@ Enable this plugin by running: `require("nvim-marimo").enable(bufnr, opts)`.
 `opts` is a table which takes the following keys:
 * `url` - url to the marimo server. A lot of the time this may be `http://127.0.0.1:2718`
 * `curl_args` - additional args for `curl` when connecting to the marimo server.
-* `render_style` - one of `virt_lines` (default), `split` or `nothing`. This controls the way cell output is rendered.
+* `render_style` - one of `virt_lines` (default), `split`, `inline_float` or `nothing`. This controls the way cell output is rendered.
 
 If *no* `opts.url` is given, then `marimo edit ...` will be started on a random port.
 Use `opts.url` to connect to an existing `marimo edit ...` server.
@@ -75,3 +75,9 @@ Using `opts.render_style = 'split'` shows the cell output in a split on the righ
 This plugin tries to keep them in sync with scrolling etc, but expect it to be janky.
 
 <img width="500" src="https://github.com/user-attachments/assets/76d5bb48-cf40-4661-afdc-3dd6439f48bf" />
+
+## Inline float rendering
+
+Using `opts.render_style = 'inline_float'` looks similar to `virt_lines` but the output is shown in a float instead.
+This has the advantage that the float can be scrolled and selected (unlike virtual lines).
+Expect it to be janky.

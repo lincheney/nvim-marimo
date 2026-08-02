@@ -642,6 +642,8 @@ function M.enable(bufnr, opts)
         render_backend = require('nvim-marimo.virt_lines')
     elseif opts.render_style == 'split' then
         render_backend = require('nvim-marimo.split')
+    elseif opts.render_style == 'inline_float' then
+        render_backend = require('nvim-marimo.inline_float')
     elseif opts.render_style == 'nothing' then
         render_backend = require('nvim-marimo.nothing')
     else
