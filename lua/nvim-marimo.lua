@@ -241,6 +241,8 @@ local function kernel_execute(state, bufnr, code, out_callback, done_callback)
         end
 
         local payload = vim.json.encode({code = code})
+        local type = nil
+        local lines = {''}
         result.inner = curl(state, "/api/kernel/execute", {
             "-N",
             "-H", "Content-Type: application/json",
@@ -251,8 +253,6 @@ local function kernel_execute(state, bufnr, code, out_callback, done_callback)
                 if not data then
                     return
                 end
-
-                local type = nil
 
                 local process = function(line)
                     local sse_event = line:match("^event: (.*)")
@@ -280,9 +280,13 @@ local function kernel_execute(state, bufnr, code, out_callback, done_callback)
                     end
                 end
 
-                for line in vim.gsplit(data, '\n') do
-                    process(line)
+                data = vim.split(data, '\n')
+                lines[#lines] = lines[#lines] .. data[1]
+                vim.list_extend(lines, data, 2)
+                for i = 1, #lines - 1 do
+                    process(lines[i])
                 end
+                lines = {lines[#lines]}
 
             end
         }, done_callback)
