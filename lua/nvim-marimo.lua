@@ -5,7 +5,7 @@ local NAMESPACE = vim.api.nvim_create_namespace("nvim-marimo")
 
 local IS_ONLY_MARKDOWN = --[[python--]] [[
 def is_only_markdown(cell, ft):
-    return ft.startswith('markdown') and (cell.code == "\n" or (cell.code.startswith('mo.md(r"""\n') and cell.code.rstrip('\n').endswith('\n""")')))
+    return ft.startswith('markdown') and (cell.code == '' or cell.code == "\n" or (cell.code.startswith('mo.md(r"""\n') and cell.code.rstrip('\n').endswith('\n""")')) or (cell.code.startswith("mo.md(r'''\n") and cell.code.rstrip('\n').endswith("\n''')")))
 ]]
 
 -- Buffer-local states
