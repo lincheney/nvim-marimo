@@ -27,7 +27,7 @@ function M.render(bufnr, state)
         if status == 'idle' then
             status = 'success'
         end
-        table.insert(virt_lines, {{'('..status..')', 'MarimoStatus_' .. data.status:gsub('%-', '_')}, {SEP, 'MarimoBorder'}})
+        table.insert(virt_lines, {{'('..status..')', 'MarimoStatus_' .. (data.status or 'unknown'):gsub('%-', '_')}, {SEP, 'MarimoBorder'}})
 
         if data.console_outputs then
             for _, out in ipairs(data.console_outputs) do
